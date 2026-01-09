@@ -10,6 +10,30 @@ A headless, multi-tenant payment recovery engine built with strict architectural
 - **Concurrency Control**: Task queue uses `SELECT FOR UPDATE SKIP LOCKED` to prevent race conditions
 - **Isolation**: PostgreSQL acts as the state machine for all operations
 - **Idempotency**: Event deduplication via `processed_events` table
+- **Multi-Tenancy**: StripeClientFactory provides tenant-scoped Stripe clients with `stripeAccount` config
+
+### Multi-Tenant Stripe Client Architecture
+
+The `StripeClientFactory` class in `server/stripeClient.ts` provides proper multi-tenant isolation:
+
+```typescript
+// Get tenant-scoped Stripe client
+const factory = await getStripeClientFactory();
+const tenantClient = await factory.getClient(merchantId);
+
+// Client is configured with { stripeAccount: merchant.stripeConnectId }
+// All API calls through this client are scoped to the connected account
+```
+
+### Webhook Routing Logic
+
+The `server/webhookHandlers.ts` implements granular control over payment failures:
+
+**invoice.payment_failed handling:**
+1. `billing_reason === 'subscription_create'` → IGNORE (Onboarding failure)
+2. `billing_reason === 'subscription_cycle'` → PROCESS (Churn recovery - enqueue Dunning Task)
+3. `billing_reason === 'subscription_update'` → IGNORE (Manual intervention)
+4. `billing_reason === 'manual'` → IGNORE (Not automated recovery target)
 
 ### Database Schema
 1. **merchants** - Multi-tenant support with Stripe Connect credentials
@@ -29,14 +53,11 @@ High-churn tables have optimized autovacuum settings:
 ### Backend
 - Node.js with Express
 - PostgreSQL with Drizzle ORM
-- Stripe SDK with stripe-replit-sync
+- Stripe SDK (direct, no stripe-replit-sync)
 - TypeScript
 
 ### Frontend
-- React with Vite
-- TanStack Query for data fetching
-- Tailwind CSS with shadcn/ui components
-- wouter for routing
+- Minimal React placeholder (headless API focus)
 
 ## API Endpoints
 
@@ -63,6 +84,9 @@ High-churn tables have optimized autovacuum settings:
 - `POST /api/worker/claim` - Claim next pending task (uses SKIP LOCKED)
 - `POST /api/worker/complete/:id` - Mark task complete/failed
 
+### Stripe Webhook
+- `POST /api/stripe/webhook` - Handles Stripe webhook events with billing_reason filtering
+
 ### Health
 - `GET /api/health` - System health check
 
@@ -83,6 +107,13 @@ This ensures:
 - Locked rows are skipped, not blocked
 - Full ACID compliance
 
+## Key Files
+
+- `server/stripeClient.ts` - StripeClientFactory for multi-tenant Stripe clients
+- `server/webhookHandlers.ts` - Manual webhook routing with billing_reason filtering
+- `server/storage.ts` - Database operations with SELECT FOR UPDATE SKIP LOCKED
+- `shared/schema.ts` - Drizzle ORM schema definitions
+
 ## Development Commands
 
 - `npm run dev` - Start development server
@@ -90,9 +121,8 @@ This ensures:
 - `npm run build` - Build for production
 
 ## Recent Changes
-- 2026-01-09: Initial implementation of The Citadel MVP
-  - Complete database schema with 5 tables
-  - Frontend dashboard with metrics, task queue, merchants, activity pages
-  - Backend APIs with SELECT FOR UPDATE SKIP LOCKED pattern
-  - Stripe integration with webhook support
-  - Autovacuum optimization applied
+- 2026-01-09: Architectural refactor
+  - Implemented StripeClientFactory for proper multi-tenant isolation
+  - Created webhookHandlers.ts with billing_reason filtering
+  - Removed stripe-replit-sync dependency
+  - Simplified to headless API backend
