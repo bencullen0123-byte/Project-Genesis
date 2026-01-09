@@ -35,18 +35,34 @@ The `server/webhookHandlers.ts` implements granular control over payment failure
 3. `billing_reason === 'subscription_update'` → IGNORE (Manual intervention)
 4. `billing_reason === 'manual'` → IGNORE (Not automated recovery target)
 
+### Stripe Connect OAuth Flow
+
+The OAuth flow uses secure state tokens for CSRF protection:
+
+1. **Authorize**: `POST /api/stripe/connect/authorize`
+   - Generates cryptographically secure state token
+   - Creates pending merchant record with state
+   - Returns Stripe OAuth URL for redirect
+
+2. **Callback**: `GET /api/stripe/connect/callback`
+   - Validates state token against database
+   - Exchanges authorization code for access token
+   - Updates merchant with Stripe Connect credentials
+   - Redirects to dashboard
+
 ### Database Schema
-1. **merchants** - Multi-tenant support with Stripe Connect credentials
+1. **merchants** - Multi-tenant support with Stripe Connect credentials, OAuth state
 2. **scheduled_tasks** - Task queue with status tracking (pending/running/completed/failed)
 3. **usage_logs** - Activity ledger for UI and analytics
 4. **processed_events** - Idempotency key storage
 5. **daily_metrics** - Aggregated recovery metrics per merchant
 
-### Autovacuum Optimization
-High-churn tables have optimized autovacuum settings:
-- `scheduled_tasks`: 5% vacuum scale factor
-- `processed_events`: 5% vacuum scale factor  
-- `usage_logs`: 10% vacuum scale factor
+### Database Performance Tuning
+
+Autovacuum settings applied on every server startup (persisted):
+- `scheduled_tasks`: 1% vacuum scale factor (aggressive)
+- `processed_events`: 1% vacuum scale factor (aggressive)
+- `usage_logs`: 5% vacuum scale factor
 
 ## Technology Stack
 
@@ -84,6 +100,10 @@ High-churn tables have optimized autovacuum settings:
 - `POST /api/worker/claim` - Claim next pending task (uses SKIP LOCKED)
 - `POST /api/worker/complete/:id` - Mark task complete/failed
 
+### Stripe Connect OAuth
+- `POST /api/stripe/connect/authorize` - Initiate OAuth flow (requires STRIPE_CLIENT_ID env var)
+- `GET /api/stripe/connect/callback` - Handle OAuth callback from Stripe
+
 ### Stripe Webhook
 - `POST /api/stripe/webhook` - Handles Stripe webhook events with billing_reason filtering
 
@@ -107,10 +127,17 @@ This ensures:
 - Locked rows are skipped, not blocked
 - Full ACID compliance
 
+## Environment Variables
+
+Required for full functionality:
+- `DATABASE_URL` - PostgreSQL connection string (auto-configured)
+- `STRIPE_CLIENT_ID` - Your Stripe Connect platform client ID (for OAuth)
+
 ## Key Files
 
 - `server/stripeClient.ts` - StripeClientFactory for multi-tenant Stripe clients
 - `server/webhookHandlers.ts` - Manual webhook routing with billing_reason filtering
+- `server/routes.ts` - API routes including OAuth endpoints
 - `server/storage.ts` - Database operations with SELECT FOR UPDATE SKIP LOCKED
 - `shared/schema.ts` - Drizzle ORM schema definitions
 
@@ -120,9 +147,19 @@ This ensures:
 - `npm run db:push` - Push schema changes to database
 - `npm run build` - Build for production
 
+## Sprint 1 Status: COMPLETE
+
+### Completed Stories:
+- Story 1: Database schema with optimized autovacuum (persisted on startup)
+- Story 2: StripeClientFactory for multi-tenant isolation
+- Story 3: Stripe Connect OAuth flow (authorize + callback endpoints)
+- Story 4: Webhook handlers with billing_reason filtering
+
 ## Recent Changes
-- 2026-01-09: Architectural refactor
+- 2026-01-09: Sprint 1 Complete
   - Implemented StripeClientFactory for proper multi-tenant isolation
   - Created webhookHandlers.ts with billing_reason filtering
+  - Implemented full Stripe Connect OAuth flow
+  - Added database warmup with autovacuum settings on startup
   - Removed stripe-replit-sync dependency
   - Simplified to headless API backend
