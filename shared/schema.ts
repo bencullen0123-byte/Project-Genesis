@@ -6,13 +6,16 @@ import { z } from "zod";
 // 1. MERCHANTS TABLE - Multi-tenant support
 export const merchants = pgTable("merchants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  stripeConnectId: text("stripe_connect_id").unique().notNull(),
+  stripeConnectId: text("stripe_connect_id").unique(),
   stripeUserId: text("stripe_user_id"),
   accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  oauthState: text("oauth_state"),
   tier: text("tier").default("FREE").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_merchants_stripe_connect").on(table.stripeConnectId),
+  index("idx_merchants_oauth_state").on(table.oauthState),
 ]);
 
 // 2. SCHEDULED TASKS - The Queue (State Machine)

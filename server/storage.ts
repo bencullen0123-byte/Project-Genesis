@@ -23,6 +23,7 @@ export interface IStorage {
   // Merchants
   getMerchant(id: string): Promise<Merchant | undefined>;
   getMerchantByStripeConnectId(stripeConnectId: string): Promise<Merchant | undefined>;
+  getMerchantByOAuthState(state: string): Promise<Merchant | undefined>;
   getMerchants(): Promise<Merchant[]>;
   createMerchant(merchant: InsertMerchant): Promise<Merchant>;
   updateMerchant(id: string, data: Partial<InsertMerchant>): Promise<Merchant | undefined>;
@@ -71,6 +72,11 @@ export class DatabaseStorage implements IStorage {
 
   async getMerchantByStripeConnectId(stripeConnectId: string): Promise<Merchant | undefined> {
     const [merchant] = await db.select().from(merchants).where(eq(merchants.stripeConnectId, stripeConnectId));
+    return merchant;
+  }
+
+  async getMerchantByOAuthState(state: string): Promise<Merchant | undefined> {
+    const [merchant] = await db.select().from(merchants).where(eq(merchants.oauthState, state));
     return merchant;
   }
 

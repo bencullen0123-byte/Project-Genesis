@@ -5,6 +5,8 @@ import { createServer } from "http";
 import { getStripeClientFactory, getStripeSecretKey } from './stripeClient';
 import { handleStripeWebhook } from './webhookHandlers';
 import Stripe from 'stripe';
+import { db } from './db';
+import { sql } from 'drizzle-orm';
 
 const app = express();
 const httpServer = createServer(app);
@@ -27,6 +29,20 @@ export function log(message: string, source = "express") {
 }
 
 let webhookSecret: string | null = null;
+
+async function databaseWarmup() {
+  try {
+    log('Applying database performance tuning...', 'db');
+    
+    await db.execute(sql`ALTER TABLE scheduled_tasks SET (autovacuum_vacuum_scale_factor = 0.01)`);
+    await db.execute(sql`ALTER TABLE processed_events SET (autovacuum_vacuum_scale_factor = 0.01)`);
+    await db.execute(sql`ALTER TABLE usage_logs SET (autovacuum_vacuum_scale_factor = 0.05)`);
+    
+    log('Database performance tuning applied', 'db');
+  } catch (error: any) {
+    log(`Database warmup warning: ${error.message}`, 'db');
+  }
+}
 
 async function initStripe() {
   try {
@@ -69,6 +85,7 @@ async function initStripe() {
 }
 
 (async () => {
+  await databaseWarmup();
   await initStripe();
 
   app.post(

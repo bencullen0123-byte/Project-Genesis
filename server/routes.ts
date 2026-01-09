@@ -3,6 +3,8 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertScheduledTaskSchema, insertMerchantSchema } from "@shared/schema";
 import { z } from "zod";
+import crypto from "crypto";
+import { getStripeClientFactory } from "./stripeClient";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -213,18 +215,91 @@ export async function registerRoutes(
     }
   });
 
-  // Stripe Connect OAuth placeholder
+  // Stripe Connect OAuth - Authorize endpoint
   app.post("/api/stripe/connect/authorize", async (req, res) => {
     try {
-      // In production, this would redirect to Stripe OAuth
-      // For now, return a placeholder
+      const clientId = process.env.STRIPE_CLIENT_ID;
+      
+      if (!clientId) {
+        return res.status(500).json({ 
+          error: "Stripe Connect not configured",
+          message: "STRIPE_CLIENT_ID environment variable is required"
+        });
+      }
+
+      const state = crypto.randomBytes(32).toString('hex');
+
+      const merchant = await storage.createMerchant({
+        oauthState: state,
+        tier: "FREE",
+      });
+
+      const authorizeUrl = new URL('https://connect.stripe.com/oauth/authorize');
+      authorizeUrl.searchParams.set('response_type', 'code');
+      authorizeUrl.searchParams.set('client_id', clientId);
+      authorizeUrl.searchParams.set('scope', 'read_write');
+      authorizeUrl.searchParams.set('state', state);
+
       res.json({ 
-        url: null, 
-        message: "Stripe Connect OAuth flow would be initiated here" 
+        url: authorizeUrl.toString(),
+        state,
+        merchantId: merchant.id,
       });
     } catch (error) {
-      console.error("Stripe connect error:", error);
+      console.error("Stripe connect authorize error:", error);
       res.status(500).json({ error: "Failed to initiate Stripe Connect" });
+    }
+  });
+
+  // Stripe Connect OAuth - Callback endpoint
+  app.get("/api/stripe/connect/callback", async (req, res) => {
+    try {
+      const { code, state, error: oauthError, error_description } = req.query;
+
+      if (oauthError) {
+        console.error("OAuth error:", oauthError, error_description);
+        return res.redirect(`/?error=${encodeURIComponent(error_description as string || 'OAuth failed')}`);
+      }
+
+      if (!code || !state) {
+        return res.redirect('/?error=Missing authorization code or state');
+      }
+
+      const merchant = await storage.getMerchantByOAuthState(state as string);
+      
+      if (!merchant) {
+        console.error("Invalid OAuth state:", state);
+        return res.redirect('/?error=Invalid or expired state token');
+      }
+
+      const factory = await getStripeClientFactory();
+      const platformClient = factory.getPlatformClient();
+
+      const response = await platformClient.oauth.token({
+        grant_type: 'authorization_code',
+        code: code as string,
+      });
+
+      await storage.updateMerchant(merchant.id, {
+        stripeConnectId: response.stripe_user_id,
+        stripeUserId: response.stripe_user_id,
+        accessToken: response.access_token,
+        refreshToken: response.refresh_token || null,
+        oauthState: null,
+      });
+
+      await storage.createUsageLog({
+        merchantId: merchant.id,
+        metricType: 'merchant_connected',
+        amount: 1,
+      });
+
+      console.log(`Merchant ${merchant.id} connected with Stripe account ${response.stripe_user_id}`);
+
+      res.redirect('/?connected=true');
+    } catch (error: any) {
+      console.error("Stripe connect callback error:", error);
+      res.redirect(`/?error=${encodeURIComponent(error.message || 'Connection failed')}`);
     }
   });
 
