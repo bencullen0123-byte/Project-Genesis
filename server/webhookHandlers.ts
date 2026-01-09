@@ -1,17 +1,220 @@
-import { getStripeSync } from './stripeClient';
+import Stripe from 'stripe';
+import { storage } from './storage';
+import { getStripeClientFactory } from './stripeClient';
+import { TaskStatus } from '@shared/schema';
 
-export class WebhookHandlers {
-  static async processWebhook(payload: Buffer, signature: string): Promise<void> {
-    if (!Buffer.isBuffer(payload)) {
-      throw new Error(
-        'STRIPE WEBHOOK ERROR: Payload must be a Buffer. ' +
-        'Received type: ' + typeof payload + '. ' +
-        'This usually means express.json() parsed the body before reaching this handler. ' +
-        'FIX: Ensure webhook route is registered BEFORE app.use(express.json()).'
-      );
+export interface WebhookResult {
+  processed: boolean;
+  action: 'ignored' | 'enqueued' | 'error';
+  reason: string;
+  taskId?: number;
+}
+
+export async function handleStripeWebhook(event: Stripe.Event): Promise<WebhookResult> {
+  const eventId = event.id;
+
+  const alreadyProcessed = await storage.hasProcessedEvent(eventId);
+  if (alreadyProcessed) {
+    return {
+      processed: false,
+      action: 'ignored',
+      reason: `Event ${eventId} already processed (idempotency check)`,
+    };
+  }
+
+  switch (event.type) {
+    case 'invoice.payment_failed':
+      return handleInvoicePaymentFailed(event);
+    
+    case 'customer.subscription.deleted':
+      return handleSubscriptionDeleted(event);
+    
+    case 'charge.failed':
+      return handleChargeFailed(event);
+
+    default:
+      await storage.markEventProcessed(eventId);
+      return {
+        processed: true,
+        action: 'ignored',
+        reason: `Event type ${event.type} not handled`,
+      };
+  }
+}
+
+async function handleInvoicePaymentFailed(event: Stripe.Event): Promise<WebhookResult> {
+  const invoice = event.data.object as Stripe.Invoice;
+  const billingReason = invoice.billing_reason;
+
+  if (billingReason === 'subscription_create') {
+    await storage.markEventProcessed(event.id);
+    return {
+      processed: true,
+      action: 'ignored',
+      reason: 'Onboarding failure (subscription_create) - not a churn recovery target',
+    };
+  }
+
+  if (billingReason === 'subscription_cycle') {
+    return enqueueDunningTask(event, invoice);
+  }
+
+  if (billingReason === 'subscription_update') {
+    await storage.markEventProcessed(event.id);
+    return {
+      processed: true,
+      action: 'ignored',
+      reason: 'Subscription update failure - manual intervention may be needed',
+    };
+  }
+
+  if (billingReason === 'manual') {
+    await storage.markEventProcessed(event.id);
+    return {
+      processed: true,
+      action: 'ignored', 
+      reason: 'Manual invoice failure - not automated recovery target',
+    };
+  }
+
+  await storage.markEventProcessed(event.id);
+  return {
+    processed: true,
+    action: 'ignored',
+    reason: `Unhandled billing_reason: ${billingReason}`,
+  };
+}
+
+async function enqueueDunningTask(event: Stripe.Event, invoice: Stripe.Invoice): Promise<WebhookResult> {
+  try {
+    const stripeConnectId = event.account;
+    
+    if (!stripeConnectId) {
+      await storage.markEventProcessed(event.id);
+      return {
+        processed: true,
+        action: 'error',
+        reason: 'No Stripe Connect account ID in event - cannot determine tenant',
+      };
     }
 
-    const sync = await getStripeSync();
-    await sync.processWebhook(payload, signature);
+    const factory = await getStripeClientFactory();
+    let merchantId: string;
+
+    try {
+      const result = await factory.getClientByConnectId(stripeConnectId);
+      merchantId = result.merchantId;
+    } catch (err) {
+      await storage.markEventProcessed(event.id);
+      return {
+        processed: true,
+        action: 'error',
+        reason: `Unknown merchant for Connect ID ${stripeConnectId}`,
+      };
+    }
+
+    const retryDelay = calculateRetryDelay(invoice);
+    const runAt = new Date(Date.now() + retryDelay);
+
+    const task = await storage.createTask({
+      merchantId,
+      taskType: 'dunning_retry',
+      payload: {
+        eventId: event.id,
+        invoiceId: invoice.id,
+        customerId: invoice.customer as string,
+        subscriptionId: invoice.subscription as string,
+        amountDue: invoice.amount_due,
+        currency: invoice.currency,
+        attemptCount: invoice.attempt_count || 1,
+        billingReason: invoice.billing_reason,
+        hostedInvoiceUrl: invoice.hosted_invoice_url,
+      },
+      status: TaskStatus.PENDING,
+      runAt,
+    });
+
+    await storage.createUsageLog({
+      merchantId,
+      metricType: 'task_scheduled',
+      amount: 1,
+    });
+
+    await storage.markEventProcessed(event.id);
+
+    return {
+      processed: true,
+      action: 'enqueued',
+      reason: `Dunning task scheduled for invoice ${invoice.id} at ${runAt.toISOString()}`,
+      taskId: task.id,
+    };
+  } catch (error: any) {
+    return {
+      processed: false,
+      action: 'error',
+      reason: `Failed to enqueue dunning task: ${error.message}`,
+    };
   }
+}
+
+function calculateRetryDelay(invoice: Stripe.Invoice): number {
+  const attemptCount = invoice.attempt_count || 1;
+  
+  const delays: Record<number, number> = {
+    1: 3 * 24 * 60 * 60 * 1000,
+    2: 5 * 24 * 60 * 60 * 1000,
+    3: 7 * 24 * 60 * 60 * 1000,
+  };
+
+  return delays[attemptCount] || 7 * 24 * 60 * 60 * 1000;
+}
+
+async function handleSubscriptionDeleted(event: Stripe.Event): Promise<WebhookResult> {
+  const subscription = event.data.object as Stripe.Subscription;
+  const stripeConnectId = event.account;
+
+  if (!stripeConnectId) {
+    await storage.markEventProcessed(event.id);
+    return {
+      processed: true,
+      action: 'ignored',
+      reason: 'No Stripe Connect account ID - cannot log churn',
+    };
+  }
+
+  try {
+    const factory = await getStripeClientFactory();
+    const { merchantId } = await factory.getClientByConnectId(stripeConnectId);
+
+    await storage.createUsageLog({
+      merchantId,
+      metricType: 'subscription_churned',
+      amount: 1,
+    });
+
+    await storage.markEventProcessed(event.id);
+
+    return {
+      processed: true,
+      action: 'ignored',
+      reason: `Subscription ${subscription.id} churned - logged for analytics`,
+    };
+  } catch (err: any) {
+    await storage.markEventProcessed(event.id);
+    return {
+      processed: true,
+      action: 'error',
+      reason: `Failed to log subscription churn: ${err.message}`,
+    };
+  }
+}
+
+async function handleChargeFailed(event: Stripe.Event): Promise<WebhookResult> {
+  await storage.markEventProcessed(event.id);
+  
+  return {
+    processed: true,
+    action: 'ignored',
+    reason: 'Charge failures handled via invoice.payment_failed',
+  };
 }
