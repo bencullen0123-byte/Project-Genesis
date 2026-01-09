@@ -50,6 +50,22 @@ async function initStripe() {
     const factory = await getStripeClientFactory();
     log('Stripe client factory ready', 'stripe');
 
+    // Validate Stripe Connect OAuth prerequisites
+    if (!process.env.STRIPE_CLIENT_ID) {
+      log('CRITICAL: STRIPE_CLIENT_ID is missing. OAuth will fail.', 'stripe');
+    } else {
+      log(`Stripe Connect Client ID configured: ${process.env.STRIPE_CLIENT_ID.substring(0, 10)}...`, 'stripe');
+    }
+
+    // Output required redirect URI for Stripe Dashboard configuration
+    const replitDomain = process.env.REPLIT_DOMAINS?.split(',')[0];
+    if (replitDomain) {
+      const redirectUri = `https://${replitDomain}/api/stripe/connect/callback`;
+      log(`REQUIRED STRIPE REDIRECT URI: ${redirectUri}`, 'stripe');
+    } else {
+      log('Warning: REPLIT_DOMAINS not set, cannot determine redirect URI', 'stripe');
+    }
+
     const platformClient = factory.getPlatformClient();
     
     log('Setting up webhook endpoint...', 'stripe');
