@@ -1,0 +1,50 @@
+To "fully close Sprint 1," we need to replace the placeholders with real code. Specifically, the OAuth flow is currently a "dead end" in server/routes.ts, and the database performance tuning (autovacuum) isn't saved in the startup script.
+
+Here is the "Closer" Prompt. Paste this directly into Replit to force it to finish the job.
+
+SYSTEM DIRECTIVE: FINALIZE SPRINT 1 (OAUTH & CONFIG)
+
+Context: Sprint 1 is 90% complete. The Database and Factory are built. Gap Analysis:
+
+Critical: Story 3 (OAuth) is currently a placeholder in server/routes.ts.
+
+Minor: Story 1.2 (Autovacuum) is not persisted in server/index.ts.
+
+ACTION PLAN:
+
+Task 3.1: Implement Real OAuth (Story 3)
+
+Objective: Replace the placeholder in server/routes.ts with the actual Stripe Connect flow.
+
+Requirements:
+
+Authorize Endpoint: Generate a secure state token and return a JSON object with the url to redirect the frontend to: https://connect.stripe.com/oauth/authorize?response_type=code&client_id=${process.env.STRIPE_CLIENT_ID}&scope=read_write&state=${state}.
+
+Callback Endpoint: Implement GET /api/stripe/connect/callback.
+
+Exchange the code for an access_token and stripe_user_id using the platform client from StripeClientFactory.
+
+Store Credentials: Update the merchants table row matching the state/session with the new credentials.
+
+Redirect: Send the user to the Dashboard (/) on success.
+
+Task 1.2: Persist Performance Config (Story 1)
+
+Objective: Ensure the aggressive autovacuum setting survives a server restart.
+
+Action: In server/index.ts, add a "Database Warmup" step inside the startup function before the server listens.
+
+Code:
+
+TypeScript
+
+// Force autovacuum settings for the queue table
+await db.execute(sql`ALTER TABLE scheduled_tasks SET (autovacuum_vacuum_scale_factor = 0.01)`);
+log('Database performance tuning applied', 'db');
+Output Requirement:
+
+Show the code for the new /api/stripe/connect/callback route.
+
+Confirm the autovacuum SQL is added to the server startup.
+
+STOP. Do not proceed to Sprint 2 until OAuth is verified.
