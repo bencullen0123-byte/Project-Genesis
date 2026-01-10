@@ -73,11 +73,14 @@ async function initStripe() {
     const webhookBaseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
     const webhookUrl = `${webhookBaseUrl}/api/stripe/webhook`;
     
-    // Check for STRIPE_WEBHOOK_SECRET in environment
-    if (process.env.STRIPE_WEBHOOK_SECRET) {
-      log('Using STRIPE_WEBHOOK_SECRET from environment', 'stripe');
-    } else {
-      log('WARNING: STRIPE_WEBHOOK_SECRET not set - signature verification will be skipped', 'stripe');
+    // Mandatory webhook secret validation
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      if (process.env.NODE_ENV === 'production') {
+        log('CRITICAL: STRIPE_WEBHOOK_SECRET is missing. Production environment cannot verify webhooks.', 'stripe');
+        process.exit(1);
+      } else {
+        log('WARNING: STRIPE_WEBHOOK_SECRET not set - signature verification will be skipped in dev mode', 'stripe');
+      }
     }
     
     try {
