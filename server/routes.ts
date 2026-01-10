@@ -5,6 +5,7 @@ import { insertScheduledTaskSchema, insertMerchantSchema } from "@shared/schema"
 import { z } from "zod";
 import crypto from "crypto";
 import { getStripeClientFactory } from "./stripeClient";
+import { checkUsageLimits } from "./middleware";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -18,10 +19,26 @@ export async function registerRoutes(
       const recentTasks = await storage.getRecentTasks(5);
       const recentActivity = await storage.getUsageLogs(undefined, undefined, 10);
 
+      const merchantId = req.query.merchantId as string | undefined;
+      let usage = { current: 0, limit: 1000 };
+      
+      if (merchantId) {
+        const monthlyCount = await storage.getMonthlyDunningCount(merchantId);
+        usage = { current: monthlyCount, limit: 1000 };
+      } else {
+        const merchants = await storage.getMerchants();
+        if (merchants.length > 0) {
+          const firstMerchant = merchants[0];
+          const monthlyCount = await storage.getMonthlyDunningCount(firstMerchant.id);
+          usage = { current: monthlyCount, limit: 1000 };
+        }
+      }
+
       res.json({
         stats,
         recentTasks,
         recentActivity,
+        usage,
       });
     } catch (error) {
       console.error("Dashboard error:", error);
@@ -55,7 +72,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/tasks", async (req, res) => {
+  app.post("/api/tasks", checkUsageLimits, async (req, res) => {
     try {
       const validated = insertScheduledTaskSchema.parse(req.body);
       const task = await storage.createTask(validated);
