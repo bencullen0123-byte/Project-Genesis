@@ -1,0 +1,56 @@
+System Directive: Sprint 5 Hotfix (Security & Integrity)
+Context: The previous deployment introduced a Critical Severity vulnerability (IDOR) in the merchant update route and left the database schema unversioned. We must fix this immediately.
+
+Task 1: Secure the Update Route (IDOR Fix)
+File: server/routes.ts Action: Replace the insecure PATCH /api/merchants/:id route with a session-secure implementation. Requirements:
+
+Change Route Path: Rename from /:id to /me.
+
+Enforce Session ID: strictly use req.user.id to identify the record. Never trust user input for the target ID.
+
+Sanitize: Ensure the response does not leak sensitive internal fields if an error occurs.
+
+Code to Implement:
+
+TypeScript
+
+// server/routes.ts - Replace the existing PATCH route with this:
+app.patch("/api/merchants/me", async (req, res) => {
+  if (!req.isAuthenticated()) return res.sendStatus(401);
+
+  try {
+    const merchantId = req.user.id; // SECURE: Derived from session
+    const { billingCountry, billingAddress, email } = req.body;
+
+    const updateData: Record<string, any> = {};
+    if (billingCountry !== undefined) updateData.billingCountry = billingCountry;
+    if (billingAddress !== undefined) updateData.billingAddress = billingAddress;
+    if (email !== undefined) updateData.email = email;
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: "No valid fields to update" });
+    }
+
+    const updated = await storage.updateMerchant(merchantId, updateData);
+    res.json(updated);
+  } catch (error) {
+    // Use the structured logger we created in Task 3.3
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log(`Update merchant error: ${errorMessage}`, 'error'); 
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+Task 2: Formalize Migration (Prevent Drift)
+Context: We previously "pushed" the schema changes. To ensure production deployments are deterministic and don't crash if columns already exist, we need a safe SQL migration file. File: Create migrations/0001_add_billing_fields.sql Content:
+
+SQL
+
+ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "billing_country" text;
+ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "billing_address" text;
+ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "email" text;
+Verification Steps
+Restart the server.
+
+Verify logs show: [db] Database migrations completed.
+
+Verify that PATCH /api/merchants/me works for the logged-in user.
