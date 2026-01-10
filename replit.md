@@ -141,6 +141,7 @@ Required for full functionality:
 - `server/storage.ts` - Database operations with SELECT FOR UPDATE SKIP LOCKED
 - `server/email.ts` - Resend email service with dev-mode safety
 - `server/worker.ts` - Task processor with dunning/action-required email sending
+- `server/cron.ts` - Self-healing janitor for zombie rescue and event pruning
 - `shared/schema.ts` - Drizzle ORM schema definitions
 
 ## Development Commands
@@ -173,6 +174,7 @@ Required for full functionality:
 
 ### Completed Stories:
 - Story 9: God Mode Analytics with atomic UPSERT triggers and O(1) dashboard queries
+- Story 10: Self-Healing Janitor with zombie task rescue and event pruning
 
 ### Real-Time Analytics Architecture
 
@@ -192,6 +194,23 @@ The analytics system uses application-side triggers for O(1) dashboard performan
 - Primary key: `(merchant_id, metric_date)`
 - Columns: `recovered_cents` (bigint), `emails_sent` (int)
 
+### Self-Healing Janitor
+
+The `server/cron.ts` module provides automated cleanup:
+
+**Zombie Task Rescue:**
+- Identifies tasks stuck in `running` status for over 10 minutes
+- Resets them to `pending` status for reprocessing
+- Prevents tasks from being permanently stuck after crashes
+
+**Event Pruning:**
+- Deletes `processed_events` older than 7 days
+- Keeps idempotency table from growing unbounded
+
+**Schedule:**
+- Runs immediately on startup (catches issues from previous crash)
+- Runs every 10 minutes via `setInterval`
+
 ### Email Engine
 
 The `server/email.ts` module provides transactional email capabilities via Resend:
@@ -209,6 +228,13 @@ The `server/email.ts` module provides transactional email capabilities via Resen
 - `report_usage` - Sync usage data to Stripe meter events (self-scheduling every 5 min)
 
 ## Recent Changes
+- 2026-01-10: Sprint 4 Story 10 Complete - Self-Healing Janitor
+  - Created server/cron.ts with runCleanup() function
+  - Zombie task rescue: resets tasks stuck in 'running' status for 10+ minutes
+  - Event pruning: deletes processed_events older than 7 days
+  - Runs immediately on startup and every 10 minutes via setInterval
+  - Integrated into server/index.ts startup sequence
+
 - 2026-01-10: Sprint 4 Story 9 Complete - God Mode Analytics
   - Modified createUsageLog to use atomic UPSERT into daily_metrics within same transaction
   - Added emails_sent column to daily_metrics schema
