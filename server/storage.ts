@@ -41,6 +41,7 @@ export interface IStorage {
   // Usage Logs
   getUsageLogs(merchantId?: string, metricType?: string, limit?: number): Promise<UsageLog[]>;
   createUsageLog(log: InsertUsageLog): Promise<UsageLog>;
+  getMonthlyDunningCount(merchantId: string): Promise<number>;
 
   // Processed Events - Idempotency
   hasProcessedEvent(eventId: string): Promise<boolean>;
@@ -215,6 +216,20 @@ export class DatabaseStorage implements IStorage {
   async createUsageLog(log: InsertUsageLog): Promise<UsageLog> {
     const [created] = await db.insert(usageLogs).values(log).returning();
     return created;
+  }
+
+  async getMonthlyDunningCount(merchantId: string): Promise<number> {
+    const [result] = await db.select({
+      total: sql<number>`COALESCE(SUM(amount), 0)::int`
+    })
+    .from(usageLogs)
+    .where(and(
+      eq(usageLogs.merchantId, merchantId),
+      eq(usageLogs.metricType, 'dunning_email_sent'),
+      sql`created_at >= date_trunc('month', CURRENT_DATE)`
+    ));
+    
+    return result?.total || 0;
   }
 
   // Processed Events - Idempotency
