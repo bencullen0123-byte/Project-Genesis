@@ -173,16 +173,29 @@ export async function registerRoutes(
     }
   });
 
-  // Update merchant billing info
+  // Update merchant billing info (secured via Stripe Connect ID verification)
+  // IDOR Prevention: Requires X-Merchant-Stripe-Id header matching the merchant's Stripe Connect ID
   app.patch("/api/merchants/:id", async (req, res) => {
     try {
       const { id } = req.params;
-      const { billingCountry, billingAddress, email } = req.body;
+      const stripeConnectId = req.headers["x-merchant-stripe-id"] as string;
+
+      // Require Stripe Connect ID header for authorization
+      if (!stripeConnectId) {
+        return res.status(401).json({ message: "Authorization required" });
+      }
 
       const merchant = await storage.getMerchant(id);
       if (!merchant) {
-        return res.status(404).json({ message: "Merchant not found" });
+        return res.status(404).json({ message: "Not found" });
       }
+
+      // SECURE: Verify the caller knows the merchant's Stripe Connect ID
+      if (merchant.stripeConnectId !== stripeConnectId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const { billingCountry, billingAddress, email } = req.body;
 
       const updateData: Record<string, string | null> = {};
       if (billingCountry !== undefined) updateData.billingCountry = billingCountry;
@@ -196,8 +209,9 @@ export async function registerRoutes(
       const updated = await storage.updateMerchant(id, updateData);
       res.json(updated);
     } catch (error) {
-      console.error("Update merchant error:", error);
-      res.status(500).json({ message: "Failed to update merchant" });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({ level: "error", time: Date.now(), msg: `Update merchant error: ${errorMessage}`, source: "routes" }));
+      res.status(500).json({ message: "Internal Server Error" });
     }
   });
 
