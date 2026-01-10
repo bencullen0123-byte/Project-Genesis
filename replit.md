@@ -169,6 +169,29 @@ Required for full functionality:
 - Story 7: Metered Reporting with reportedAt column, getPendingUsageLogs/markUsageAsReported storage methods, report_usage task processor with self-scheduling, bootstrap on startup
 - Story 8: Email Engine with Resend integration, dev-mode safety (console logging when no API key), X-Entity-Ref-ID header for tracking, dunning and action-required email templates
 
+## Sprint 4 Status: COMPLETE
+
+### Completed Stories:
+- Story 9: God Mode Analytics with atomic UPSERT triggers and O(1) dashboard queries
+
+### Real-Time Analytics Architecture
+
+The analytics system uses application-side triggers for O(1) dashboard performance:
+
+**Atomic UPSERT on createUsageLog:**
+- Every `createUsageLog()` call atomically updates `daily_metrics` in the same transaction
+- Uses PostgreSQL `ON CONFLICT DO UPDATE` for race-free aggregation
+- Increments `emails_sent` counter for `dunning_email_sent` metric type
+
+**getDashboardMetrics(merchantId):**
+- Queries pre-aggregated `daily_metrics` table (last 30 days)
+- Returns: `totalRecoveredCents`, `totalEmailsSent`, `daysTracked`
+- O(1) performance vs O(n) scanning raw logs
+
+**daily_metrics schema:**
+- Primary key: `(merchant_id, metric_date)`
+- Columns: `recovered_cents` (bigint), `emails_sent` (int)
+
 ### Email Engine
 
 The `server/email.ts` module provides transactional email capabilities via Resend:
@@ -186,6 +209,13 @@ The `server/email.ts` module provides transactional email capabilities via Resen
 - `report_usage` - Sync usage data to Stripe meter events (self-scheduling every 5 min)
 
 ## Recent Changes
+- 2026-01-10: Sprint 4 Story 9 Complete - God Mode Analytics
+  - Modified createUsageLog to use atomic UPSERT into daily_metrics within same transaction
+  - Added emails_sent column to daily_metrics schema
+  - Implemented getDashboardMetrics(merchantId) for O(1) dashboard queries over last 30 days
+  - Uses PostgreSQL ON CONFLICT DO UPDATE for race-free aggregation
+  - Returns totalRecoveredCents, totalEmailsSent, daysTracked
+
 - 2026-01-10: Sprint 3 Story 8 Complete - Email Engine
   - Created server/email.ts with Resend integration via Replit Connectors
   - Implemented sendDunningEmail() for failed payment notifications
