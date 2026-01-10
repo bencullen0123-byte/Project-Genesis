@@ -13,6 +13,8 @@ export const merchants = pgTable("merchants", {
   refreshToken: text("refresh_token"),
   oauthState: text("oauth_state"),
   tier: text("tier").default("FREE").notNull(),
+  billingCountry: text("billing_country"),
+  billingAddress: text("billing_address"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_merchants_stripe_connect").on(table.stripeConnectId),
