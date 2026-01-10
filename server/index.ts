@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { getStripeClientFactory, getStripeSecretKey } from './stripeClient';
 import { handleStripeWebhook } from './webhookHandlers';
 import { startWorker } from './worker';
+import { storage } from './storage';
 import Stripe from 'stripe';
 import { db } from './db';
 import { sql } from 'drizzle-orm';
@@ -105,9 +106,31 @@ async function initStripe() {
   }
 }
 
+async function bootstrapReporter() {
+  try {
+    const hasTask = await storage.hasReportUsageTask();
+    if (!hasTask) {
+      log('Bootstrapping report_usage task...', 'reporter');
+      await storage.createTask({
+        merchantId: 'system',
+        taskType: 'report_usage',
+        payload: { scheduledBy: 'bootstrap' },
+        status: 'pending',
+        runAt: new Date(),
+      });
+      log('report_usage task created', 'reporter');
+    } else {
+      log('report_usage task already exists', 'reporter');
+    }
+  } catch (error: any) {
+    log(`Failed to bootstrap reporter: ${error.message}`, 'reporter');
+  }
+}
+
 (async () => {
   await databaseWarmup();
   await initStripe();
+  await bootstrapReporter();
 
   app.post(
     '/api/stripe/webhook',

@@ -42,6 +42,11 @@ export interface IStorage {
   getUsageLogs(merchantId?: string, metricType?: string, limit?: number): Promise<UsageLog[]>;
   createUsageLog(log: InsertUsageLog): Promise<UsageLog>;
   getMonthlyDunningCount(merchantId: string): Promise<number>;
+  getPendingUsageLogs(limit: number): Promise<UsageLog[]>;
+  markUsageAsReported(ids: number[]): Promise<void>;
+  
+  // Reporter Tasks
+  hasReportUsageTask(): Promise<boolean>;
 
   // Processed Events - Idempotency
   hasProcessedEvent(eventId: string): Promise<boolean>;
@@ -230,6 +235,30 @@ export class DatabaseStorage implements IStorage {
     ));
     
     return result?.total || 0;
+  }
+
+  async getPendingUsageLogs(limit: number): Promise<UsageLog[]> {
+    return db.select().from(usageLogs)
+      .where(sql`reported_at IS NULL`)
+      .orderBy(asc(usageLogs.createdAt))
+      .limit(limit);
+  }
+
+  async markUsageAsReported(ids: number[]): Promise<void> {
+    if (ids.length === 0) return;
+    await db.update(usageLogs)
+      .set({ reportedAt: sql`NOW()` })
+      .where(sql`id = ANY(ARRAY[${sql.raw(ids.join(','))}]::int[])`);
+  }
+
+  async hasReportUsageTask(): Promise<boolean> {
+    const [task] = await db.select().from(scheduledTasks)
+      .where(and(
+        eq(scheduledTasks.taskType, 'report_usage'),
+        sql`status IN ('pending', 'running')`
+      ))
+      .limit(1);
+    return !!task;
   }
 
   // Processed Events - Idempotency

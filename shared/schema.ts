@@ -39,8 +39,10 @@ export const usageLogs = pgTable("usage_logs", {
   metricType: text("metric_type").notNull(),
   amount: integer("amount").default(1).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  reportedAt: timestamp("reported_at"),
 }, (table) => [
   index("idx_usage_merchant_metric").on(table.merchantId, table.metricType),
+  index("idx_usage_reported").on(table.reportedAt),
 ]);
 
 // 4. PROCESSED EVENTS - Event Historian (Idempotency)
