@@ -320,6 +320,86 @@ export async function registerRoutes(
     }
   });
 
+  // Stripe Connect - Disconnect (Kill Switch)
+  app.post("/api/stripe/disconnect", async (req, res) => {
+    try {
+      const { merchantId } = req.body;
+      
+      if (!merchantId) {
+        return res.status(400).json({ message: "merchantId is required" });
+      }
+
+      const merchant = await storage.getMerchant(merchantId);
+      
+      if (!merchant) {
+        return res.status(404).json({ message: "Merchant not found" });
+      }
+
+      if (!merchant.stripeConnectId) {
+        return res.status(400).json({ message: "Merchant is not connected to Stripe" });
+      }
+
+      const factory = await getStripeClientFactory();
+      const platformClient = factory.getPlatformClient();
+
+      // Step 1: Cancel all active subscriptions for this connected account
+      try {
+        const tenantClient = await factory.getClient(merchantId);
+        const subscriptions = await tenantClient.subscriptions.list({
+          status: 'active',
+          limit: 100,
+        });
+
+        for (const sub of subscriptions.data) {
+          await tenantClient.subscriptions.cancel(sub.id);
+          console.log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`);
+        }
+      } catch (subError: any) {
+        console.warn(`Failed to cancel subscriptions for merchant ${merchantId}:`, subError.message);
+      }
+
+      // Step 2: Deauthorize OAuth connection (optional but recommended)
+      try {
+        const clientId = process.env.STRIPE_CLIENT_ID;
+        if (clientId && merchant.stripeUserId) {
+          await platformClient.oauth.deauthorize({
+            client_id: clientId,
+            stripe_user_id: merchant.stripeUserId,
+          });
+          console.log(`Deauthorized Stripe account ${merchant.stripeUserId}`);
+        }
+      } catch (deauthError: any) {
+        console.warn(`Failed to deauthorize merchant ${merchantId}:`, deauthError.message);
+      }
+
+      // Step 3: Clear Stripe credentials from database
+      await storage.updateMerchant(merchantId, {
+        stripeConnectId: null,
+        stripeUserId: null,
+        accessToken: null,
+        refreshToken: null,
+      });
+
+      // Step 4: Delete pending/running tasks
+      const deletedTasks = await storage.deletePendingTasks(merchantId);
+      console.log(`Deleted ${deletedTasks} pending tasks for merchant ${merchantId}`);
+
+      // Log the disconnection
+      await storage.createUsageLog({
+        merchantId,
+        metricType: 'merchant_disconnected',
+        amount: 1,
+      });
+
+      console.log(`Merchant ${merchantId} disconnected successfully`);
+      
+      res.json({ success: true, deletedTasks });
+    } catch (error: any) {
+      console.error("Stripe disconnect error:", error);
+      res.status(500).json({ message: "Failed to disconnect from Stripe" });
+    }
+  });
+
   // Health check
   app.get("/api/health", async (req, res) => {
     try {
