@@ -56,6 +56,7 @@ export const dailyMetrics = pgTable("daily_metrics", {
   merchantId: text("merchant_id").notNull(),
   metricDate: date("metric_date").defaultNow().notNull(),
   recoveredCents: bigint("recovered_cents", { mode: "number" }).default(0).notNull(),
+  emailsSent: integer("emails_sent").default(0).notNull(),
 }, (table) => [
   primaryKey({ columns: [table.merchantId, table.metricDate] }),
 ]);

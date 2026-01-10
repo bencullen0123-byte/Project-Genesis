@@ -54,7 +54,12 @@ export interface IStorage {
 
   // Daily Metrics
   getDailyMetrics(merchantId: string, days?: number): Promise<DailyMetric[]>;
-  updateDailyMetrics(merchantId: string, recoveredCents: number): Promise<DailyMetric>;
+  updateDailyMetrics(merchantId: string, recoveredCents: number, emailsSent?: number): Promise<DailyMetric>;
+  getDashboardMetrics(merchantId: string): Promise<{
+    totalRecoveredCents: number;
+    totalEmailsSent: number;
+    daysTracked: number;
+  }>;
 
   // Dashboard Stats
   getDashboardStats(): Promise<{
@@ -219,8 +224,45 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUsageLog(log: InsertUsageLog): Promise<UsageLog> {
-    const [created] = await db.insert(usageLogs).values(log).returning();
-    return created;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      const insertResult = await client.query(`
+        INSERT INTO usage_logs (merchant_id, metric_type, amount)
+        VALUES ($1, $2, $3)
+        RETURNING *
+      `, [log.merchantId, log.metricType, log.amount || 1]);
+      
+      const created = insertResult.rows[0];
+      
+      const emailsSent = log.metricType === 'dunning_email_sent' ? (log.amount || 1) : 0;
+      
+      await client.query(`
+        INSERT INTO daily_metrics (merchant_id, metric_date, recovered_cents, emails_sent)
+        VALUES ($1, CURRENT_DATE, $2, $3)
+        ON CONFLICT (merchant_id, metric_date)
+        DO UPDATE SET
+          recovered_cents = daily_metrics.recovered_cents + EXCLUDED.recovered_cents,
+          emails_sent = daily_metrics.emails_sent + EXCLUDED.emails_sent
+      `, [log.merchantId, 0, emailsSent]);
+      
+      await client.query('COMMIT');
+      
+      return {
+        id: created.id,
+        merchantId: created.merchant_id,
+        metricType: created.metric_type,
+        amount: created.amount,
+        createdAt: created.created_at,
+        reportedAt: created.reported_at,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getMonthlyDunningCount(merchantId: string): Promise<number> {
@@ -283,31 +325,52 @@ export class DatabaseStorage implements IStorage {
       .limit(days);
   }
 
-  async updateDailyMetrics(merchantId: string, recoveredCents: number): Promise<DailyMetric> {
-    const today = new Date().toISOString().split('T')[0];
-    
-    // Upsert pattern
-    const [existing] = await db.select().from(dailyMetrics)
-      .where(and(
-        eq(dailyMetrics.merchantId, merchantId),
-        eq(dailyMetrics.metricDate, today)
-      ));
-
-    if (existing) {
-      const [updated] = await db.update(dailyMetrics)
-        .set({ recoveredCents: (existing.recoveredCents || 0) + recoveredCents })
-        .where(and(
-          eq(dailyMetrics.merchantId, merchantId),
-          eq(dailyMetrics.metricDate, today)
-        ))
-        .returning();
-      return updated;
-    } else {
-      const [created] = await db.insert(dailyMetrics)
-        .values({ merchantId, metricDate: today, recoveredCents })
-        .returning();
-      return created;
+  async updateDailyMetrics(merchantId: string, recoveredCents: number, emailsSent: number = 0): Promise<DailyMetric> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`
+        INSERT INTO daily_metrics (merchant_id, metric_date, recovered_cents, emails_sent)
+        VALUES ($1, CURRENT_DATE, $2, $3)
+        ON CONFLICT (merchant_id, metric_date)
+        DO UPDATE SET
+          recovered_cents = daily_metrics.recovered_cents + EXCLUDED.recovered_cents,
+          emails_sent = daily_metrics.emails_sent + EXCLUDED.emails_sent
+        RETURNING *
+      `, [merchantId, recoveredCents, emailsSent]);
+      
+      const row = result.rows[0];
+      return {
+        merchantId: row.merchant_id,
+        metricDate: row.metric_date,
+        recoveredCents: Number(row.recovered_cents),
+        emailsSent: row.emails_sent,
+      };
+    } finally {
+      client.release();
     }
+  }
+
+  async getDashboardMetrics(merchantId: string): Promise<{
+    totalRecoveredCents: number;
+    totalEmailsSent: number;
+    daysTracked: number;
+  }> {
+    const [result] = await db.select({
+      totalRecoveredCents: sql<number>`COALESCE(SUM(recovered_cents), 0)::bigint`,
+      totalEmailsSent: sql<number>`COALESCE(SUM(emails_sent), 0)::int`,
+      daysTracked: sql<number>`COUNT(*)::int`,
+    })
+    .from(dailyMetrics)
+    .where(and(
+      eq(dailyMetrics.merchantId, merchantId),
+      sql`metric_date >= CURRENT_DATE - INTERVAL '30 days'`
+    ));
+    
+    return {
+      totalRecoveredCents: Number(result?.totalRecoveredCents || 0),
+      totalEmailsSent: result?.totalEmailsSent || 0,
+      daysTracked: result?.daysTracked || 0,
+    };
   }
 
   // Dashboard Stats
