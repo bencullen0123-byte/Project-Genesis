@@ -139,6 +139,8 @@ Required for full functionality:
 - `server/webhookHandlers.ts` - Manual webhook routing with billing_reason filtering
 - `server/routes.ts` - API routes including OAuth endpoints
 - `server/storage.ts` - Database operations with SELECT FOR UPDATE SKIP LOCKED
+- `server/email.ts` - Resend email service with dev-mode safety
+- `server/worker.ts` - Task processor with dunning/action-required email sending
 - `shared/schema.ts` - Drizzle ORM schema definitions
 
 ## Development Commands
@@ -165,6 +167,18 @@ Required for full functionality:
 ### Completed Stories:
 - Story 6: Webhook Engine with raw body parsing, STRIPE_WEBHOOK_SECRET verification, invoice.payment_failed and invoice.payment_action_required handling
 - Story 7: Metered Reporting with reportedAt column, getPendingUsageLogs/markUsageAsReported storage methods, report_usage task processor with self-scheduling, bootstrap on startup
+- Story 8: Email Engine with Resend integration, dev-mode safety (console logging when no API key), X-Entity-Ref-ID header for tracking, dunning and action-required email templates
+
+### Email Engine
+
+The `server/email.ts` module provides transactional email capabilities via Resend:
+
+- **Dev-mode safety**: When Resend credentials are not available, emails are logged to console instead of sent
+- **X-Entity-Ref-ID header**: Merchant ID is attached to all emails for tracking/analytics
+- **Two email types**:
+  - `sendDunningEmail()` - For failed payment notifications with retry button
+  - `sendActionRequiredEmail()` - For 3DS/SCA verification requests
+- **Integration**: Uses Replit Connectors for secure API key management
 
 ### Task Types Supported:
 - `dunning_retry` - Process failed subscription payments
@@ -172,7 +186,15 @@ Required for full functionality:
 - `report_usage` - Sync usage data to Stripe meter events (self-scheduling every 5 min)
 
 ## Recent Changes
-- 2026-01-10: Sprint 3 Complete
+- 2026-01-10: Sprint 3 Story 8 Complete - Email Engine
+  - Created server/email.ts with Resend integration via Replit Connectors
+  - Implemented sendDunningEmail() for failed payment notifications
+  - Implemented sendActionRequiredEmail() for 3DS/SCA verification
+  - Dev-mode safety: logs to console when Resend API key not available
+  - X-Entity-Ref-ID header attached for merchant tracking
+  - Wired email service to worker.ts dunning_retry and notify_action_required processors
+
+- 2026-01-10: Sprint 3 Stories 6-7 Complete
   - Added STRIPE_WEBHOOK_SECRET environment variable support for signature verification
   - Added invoice.payment_action_required webhook handling
   - Added reportedAt column to usage_logs for tracking reported usage
