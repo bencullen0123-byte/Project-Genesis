@@ -8,7 +8,7 @@ import { startWorker } from './worker';
 import { storage } from './storage';
 import Stripe from 'stripe';
 import { db } from './db';
-import { sql } from 'drizzle-orm';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { runCleanup } from './cron';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -34,17 +34,13 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
-async function databaseWarmup() {
+async function runMigrations() {
   try {
-    log('Applying database performance tuning...', 'db');
-    
-    await db.execute(sql`ALTER TABLE scheduled_tasks SET (autovacuum_vacuum_scale_factor = 0.01)`);
-    await db.execute(sql`ALTER TABLE processed_events SET (autovacuum_vacuum_scale_factor = 0.01)`);
-    await db.execute(sql`ALTER TABLE usage_logs SET (autovacuum_vacuum_scale_factor = 0.05)`);
-    
-    log('Database performance tuning applied', 'db');
+    log('Running database migrations...', 'db');
+    await migrate(db, { migrationsFolder: './migrations' });
+    log('Database migrations completed', 'db');
   } catch (error: any) {
-    log(`Database warmup warning: ${error.message}`, 'db');
+    log(`Database migration warning: ${error.message}`, 'db');
   }
 }
 
@@ -164,7 +160,7 @@ async function bootstrapWeeklyDigests() {
 }
 
 (async () => {
-  await databaseWarmup();
+  await runMigrations();
   await initStripe();
   await bootstrapReporter();
   await bootstrapWeeklyDigests();
