@@ -173,6 +173,34 @@ export async function registerRoutes(
     }
   });
 
+  // Update merchant billing info
+  app.patch("/api/merchants/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { billingCountry, billingAddress, email } = req.body;
+
+      const merchant = await storage.getMerchant(id);
+      if (!merchant) {
+        return res.status(404).json({ message: "Merchant not found" });
+      }
+
+      const updateData: Record<string, string | null> = {};
+      if (billingCountry !== undefined) updateData.billingCountry = billingCountry;
+      if (billingAddress !== undefined) updateData.billingAddress = billingAddress;
+      if (email !== undefined) updateData.email = email;
+
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
+
+      const updated = await storage.updateMerchant(id, updateData);
+      res.json(updated);
+    } catch (error) {
+      console.error("Update merchant error:", error);
+      res.status(500).json({ message: "Failed to update merchant" });
+    }
+  });
+
   // Activity Logs
   app.get("/api/activity", async (req, res) => {
     try {
