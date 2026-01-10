@@ -9,6 +9,7 @@ import { storage } from './storage';
 import Stripe from 'stripe';
 import { db } from './db';
 import { sql } from 'drizzle-orm';
+import { runCleanup } from './cron';
 
 const app = express();
 const httpServer = createServer(app);
@@ -246,6 +247,10 @@ async function bootstrapReporter() {
     () => {
       log(`serving on port ${port}`);
       startWorker();
+      
+      runCleanup();
+      setInterval(() => runCleanup(), 10 * 60 * 1000);
+      log('Janitor started (cleanup every 10 minutes)', 'cron');
     },
   );
 })();
