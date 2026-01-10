@@ -12,6 +12,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import { DisconnectStripeButton } from "@/components/disconnect-stripe-button";
 
 const menuItems = [
   {
@@ -96,11 +97,12 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="p-4 border-t border-sidebar-border">
+      <SidebarFooter className="p-4 border-t border-sidebar-border space-y-3">
         <div className="flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-status-online" />
           <span className="text-xs text-muted-foreground">System Online</span>
         </div>
+        <DisconnectStripeButton merchantId="m1-demo-merchant" />
       </SidebarFooter>
     </Sidebar>
   );
