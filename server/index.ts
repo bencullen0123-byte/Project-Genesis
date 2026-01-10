@@ -23,15 +23,23 @@ declare module "http" {
   }
 }
 
-export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
+type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
-  console.log(`${formattedTime} [${source}] ${message}`);
+export function log(message: string, source = "express", level: LogLevel = "info") {
+  const logEntry = {
+    level,
+    time: Date.now(),
+    msg: message,
+    source,
+  };
+  
+  if (level === 'error') {
+    console.error(JSON.stringify(logEntry));
+  } else if (level === 'warn') {
+    console.warn(JSON.stringify(logEntry));
+  } else {
+    console.log(JSON.stringify(logEntry));
+  }
 }
 
 async function runMigrations() {
