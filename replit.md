@@ -155,11 +155,36 @@ Required for full functionality:
 - Story 3: Stripe Connect OAuth flow (authorize + callback endpoints)
 - Story 4: Webhook handlers with billing_reason filtering
 
+## Sprint 2 Status: COMPLETE
+
+### Completed Stories:
+- Story 5: Worker hot loop with recursive setTimeout, dunning processor, Shadow Ledger with getMonthlyDunningCount, Bouncer middleware (1000/month limit), wired to /api/tasks with live usage in dashboard
+
+## Sprint 3 Status: COMPLETE
+
+### Completed Stories:
+- Story 6: Webhook Engine with raw body parsing, STRIPE_WEBHOOK_SECRET verification, invoice.payment_failed and invoice.payment_action_required handling
+- Story 7: Metered Reporting with reportedAt column, getPendingUsageLogs/markUsageAsReported storage methods, report_usage task processor with self-scheduling, bootstrap on startup
+
+### Task Types Supported:
+- `dunning_retry` - Process failed subscription payments
+- `notify_action_required` - Notify customers about required payment actions
+- `report_usage` - Sync usage data to Stripe meter events (self-scheduling every 5 min)
+
 ## Recent Changes
-- 2026-01-09: Sprint 1 Complete
+- 2026-01-10: Sprint 3 Complete
+  - Added STRIPE_WEBHOOK_SECRET environment variable support for signature verification
+  - Added invoice.payment_action_required webhook handling
+  - Added reportedAt column to usage_logs for tracking reported usage
+  - Implemented report_usage task with Stripe billing.meterEvents integration
+  - Added bootstrap logic to ensure report_usage task always exists
+  - Self-scheduling reporter runs every 5 minutes
+
+- 2026-01-09: Sprint 1 & 2 Complete
   - Implemented StripeClientFactory for proper multi-tenant isolation
   - Created webhookHandlers.ts with billing_reason filtering
   - Implemented full Stripe Connect OAuth flow
   - Added database warmup with autovacuum settings on startup
-  - Removed stripe-replit-sync dependency
-  - Simplified to headless API backend
+  - Worker hot loop with SKIP LOCKED concurrency
+  - Bouncer middleware enforcing 1000/month usage limit
+  - Dashboard with live usage data
