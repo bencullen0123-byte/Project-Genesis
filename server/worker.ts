@@ -57,8 +57,12 @@ export function startWorker(): void {
         
         try {
           await processTask(task);
+          await storage.updateTaskStatus(task.id, 'completed');
+          log(`Task ${task.id} completed successfully`, 'worker');
         } catch (taskError: any) {
           log(`Task ${task.id} processing error: ${taskError.message}`, 'worker');
+          await storage.updateTaskStatus(task.id, 'failed');
+          log(`Task ${task.id} marked as failed`, 'worker');
         }
         
         setTimeout(run, TASK_FOUND_DELAY_MS);
