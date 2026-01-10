@@ -37,6 +37,7 @@ export interface IStorage {
   claimNextTask(): Promise<ScheduledTask | undefined>;
   deleteTask(id: number): Promise<boolean>;
   deleteCompletedTasks(): Promise<number>;
+  deletePendingTasks(merchantId: string): Promise<number>;
 
   // Usage Logs
   getUsageLogs(merchantId?: string, metricType?: string, limit?: number): Promise<UsageLog[]>;
@@ -200,6 +201,16 @@ export class DatabaseStorage implements IStorage {
   async deleteCompletedTasks(): Promise<number> {
     const result = await db.delete(scheduledTasks)
       .where(eq(scheduledTasks.status, TaskStatus.COMPLETED))
+      .returning();
+    return result.length;
+  }
+
+  async deletePendingTasks(merchantId: string): Promise<number> {
+    const result = await db.delete(scheduledTasks)
+      .where(and(
+        eq(scheduledTasks.merchantId, merchantId),
+        sql`status IN ('pending', 'running')`
+      ))
       .returning();
     return result.length;
   }
