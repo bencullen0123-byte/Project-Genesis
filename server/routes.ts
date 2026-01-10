@@ -6,6 +6,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { getStripeClientFactory } from "./stripeClient";
 import { checkUsageLimits } from "./middleware";
+import { log } from "./index";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -192,6 +193,7 @@ export async function registerRoutes(
 
       // SECURE: Verify the caller knows the merchant's Stripe Connect ID
       if (merchant.stripeConnectId !== stripeConnectId) {
+        log(`Security Alert: Unauthorized update for merchant ${id}`, 'security', 'error');
         return res.status(403).json({ message: "Forbidden" });
       }
 
