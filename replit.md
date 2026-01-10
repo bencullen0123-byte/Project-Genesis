@@ -251,6 +251,13 @@ The weekly digest provides merchants with "proof of value" emails:
 - `send_weekly_digest` - Weekly "proof of value" email to merchants (self-scheduling every 7 days)
 
 ## Recent Changes
+- 2026-01-10: Sprint 5 Hotfix - Security & Integrity
+  - IDOR Fix: PATCH /api/merchants/:id now requires X-Merchant-Stripe-Id header matching merchant's Stripe Connect ID
+  - Authorization flow: 401 if header missing, 403 if header doesn't match stored stripeConnectId
+  - Added migrations/0001_add_billing_fields.sql with IF NOT EXISTS clauses for billing_country, billing_address, email columns
+  - Error responses sanitized (generic "Internal Server Error" in production)
+  - Structured JSON logging for update errors
+
 - 2026-01-10: Sprint 4 Story 11 Complete - Weekly Digest Emails
   - Added email column to merchants schema for digest delivery
   - Created sendWeeklyDigest() template in server/email.ts
