@@ -283,10 +283,21 @@ async function bootstrapWeeklyDigests() {
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+    
+    // Always log the full error for debugging
+    log(`Error [${status}]: ${err.message}`, 'error');
+    if (err.stack) {
+      console.error(err.stack);
+    }
 
-    res.status(status).json({ message });
-    throw err;
+    // In production, sanitize the response - never expose internal error details
+    if (process.env.NODE_ENV === 'production') {
+      res.status(status).json({ message: 'Internal Server Error' });
+    } else {
+      // In development, return the actual error message for debugging
+      const message = err.message || 'Internal Server Error';
+      res.status(status).json({ message });
+    }
   });
 
   if (process.env.NODE_ENV === "production") {
