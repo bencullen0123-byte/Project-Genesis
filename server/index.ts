@@ -128,10 +128,40 @@ async function bootstrapReporter() {
   }
 }
 
+async function bootstrapWeeklyDigests() {
+  try {
+    const merchants = await storage.getMerchants();
+    let created = 0;
+    
+    for (const merchant of merchants) {
+      const hasDigestTask = await storage.hasWeeklyDigestTask(merchant.id);
+      if (!hasDigestTask) {
+        await storage.createTask({
+          merchantId: merchant.id,
+          taskType: 'send_weekly_digest',
+          payload: { scheduledBy: 'bootstrap' },
+          status: 'pending',
+          runAt: new Date(),
+        });
+        created++;
+      }
+    }
+    
+    if (created > 0) {
+      log(`Created ${created} weekly digest tasks for merchants`, 'digest');
+    } else {
+      log('All merchants have weekly digest tasks', 'digest');
+    }
+  } catch (error: any) {
+    log(`Failed to bootstrap weekly digests: ${error.message}`, 'digest');
+  }
+}
+
 (async () => {
   await databaseWarmup();
   await initStripe();
   await bootstrapReporter();
+  await bootstrapWeeklyDigests();
 
   app.post(
     '/api/stripe/webhook',
