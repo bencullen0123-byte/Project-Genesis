@@ -175,6 +175,7 @@ Required for full functionality:
 ### Completed Stories:
 - Story 9: God Mode Analytics with atomic UPSERT triggers and O(1) dashboard queries
 - Story 10: Self-Healing Janitor with zombie task rescue and event pruning
+- Story 11: Weekly Digest emails with 7-day aggregation and self-scheduling
 
 ### Real-Time Analytics Architecture
 
@@ -222,12 +223,42 @@ The `server/email.ts` module provides transactional email capabilities via Resen
   - `sendActionRequiredEmail()` - For 3DS/SCA verification requests
 - **Integration**: Uses Replit Connectors for secure API key management
 
+### Weekly Digest System
+
+The weekly digest provides merchants with "proof of value" emails:
+
+**Worker Logic (send_weekly_digest):**
+- Queries `daily_metrics` for last 7 days using `getWeeklyMetrics(merchantId)`
+- Aggregates `recovered_cents` and `emails_sent`
+- Sends digest email via `sendWeeklyDigest()`
+- Self-schedules next digest 7 days out
+
+**Bootstrap:**
+- On startup, creates `send_weekly_digest` tasks for any merchants missing one
+- Ensures all merchants receive weekly reports
+
+**Email Template:**
+```html
+<h1>Weekly Report</h1>
+<p>We recovered <strong>$${recovered}</strong> for you this week.</p>
+<p>${emails} emails were sent to retain your customers.</p>
+```
+
 ### Task Types Supported:
 - `dunning_retry` - Process failed subscription payments
 - `notify_action_required` - Notify customers about required payment actions
 - `report_usage` - Sync usage data to Stripe meter events (self-scheduling every 5 min)
+- `send_weekly_digest` - Weekly "proof of value" email to merchants (self-scheduling every 7 days)
 
 ## Recent Changes
+- 2026-01-10: Sprint 4 Story 11 Complete - Weekly Digest Emails
+  - Added email column to merchants schema for digest delivery
+  - Created sendWeeklyDigest() template in server/email.ts
+  - Added send_weekly_digest case to worker.ts with 7-day aggregation
+  - Self-schedules next digest at run_at = NOW() + 7 days
+  - Added getWeeklyMetrics() and hasWeeklyDigestTask() to storage.ts
+  - Bootstrap creates digest tasks for all merchants on startup
+
 - 2026-01-10: Sprint 4 Story 10 Complete - Self-Healing Janitor
   - Created server/cron.ts with runCleanup() function
   - Zombie task rescue: resets tasks stuck in 'running' status for 10+ minutes
