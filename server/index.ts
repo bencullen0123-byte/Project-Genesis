@@ -4,6 +4,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { getStripeClientFactory, getStripeSecretKey } from './stripeClient';
 import { handleStripeWebhook } from './webhookHandlers';
+import { startWorker } from './worker';
 import Stripe from 'stripe';
 import { db } from './db';
 import { sql } from 'drizzle-orm';
@@ -210,6 +211,7 @@ async function initStripe() {
     },
     () => {
       log(`serving on port ${port}`);
+      startWorker();
     },
   );
 })();
