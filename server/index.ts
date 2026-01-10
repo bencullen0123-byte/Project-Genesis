@@ -184,20 +184,18 @@ async function bootstrapWeeklyDigests() {
           return res.status(500).json({ error: 'Webhook processing error' });
         }
 
+        const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+        
+        if (!webhookSecret) {
+          log('Webhook rejected: STRIPE_WEBHOOK_SECRET not configured', 'stripe');
+          return res.status(500).json({ error: 'Webhook secret not configured' });
+        }
+
         const secretKey = await getStripeSecretKey();
         const stripe = new Stripe(secretKey, { apiVersion: '2025-11-17.clover' });
 
-        let event: Stripe.Event;
-        
-        const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-        if (webhookSecret) {
-          event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-          log(`Webhook signature verified for event ${event.id}`, 'stripe');
-        } else {
-          event = JSON.parse(req.body.toString()) as Stripe.Event;
-          log('WARNING: Processing webhook without signature verification - set STRIPE_WEBHOOK_SECRET', 'stripe');
-        }
+        const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+        log(`Webhook signature verified for event ${event.id}`, 'stripe');
 
         log(`Received webhook: ${event.type} (${event.id})`, 'stripe');
 
