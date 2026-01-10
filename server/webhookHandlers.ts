@@ -26,6 +26,9 @@ export async function handleStripeWebhook(event: Stripe.Event): Promise<WebhookR
     case 'invoice.payment_failed':
       return handleInvoicePaymentFailed(event);
     
+    case 'invoice.payment_action_required':
+      return handlePaymentActionRequired(event);
+    
     case 'customer.subscription.deleted':
       return handleSubscriptionDeleted(event);
     
@@ -116,14 +119,15 @@ async function enqueueDunningTask(event: Stripe.Event, invoice: Stripe.Invoice):
     const retryDelay = calculateRetryDelay(invoice);
     const runAt = new Date(Date.now() + retryDelay);
 
+    const subscriptionId = invoice.parent?.subscription_details?.subscription;
     const task = await storage.createTask({
       merchantId,
       taskType: 'dunning_retry',
       payload: {
         eventId: event.id,
         invoiceId: invoice.id,
-        customerId: invoice.customer as string,
-        subscriptionId: invoice.subscription as string,
+        customerId: typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id,
+        subscriptionId: typeof subscriptionId === 'string' ? subscriptionId : (subscriptionId as any)?.id || null,
         amountDue: invoice.amount_due,
         currency: invoice.currency,
         attemptCount: invoice.attempt_count || 1,
@@ -217,4 +221,73 @@ async function handleChargeFailed(event: Stripe.Event): Promise<WebhookResult> {
     action: 'ignored',
     reason: 'Charge failures handled via invoice.payment_failed',
   };
+}
+
+async function handlePaymentActionRequired(event: Stripe.Event): Promise<WebhookResult> {
+  const invoice = event.data.object as Stripe.Invoice;
+  const stripeConnectId = event.account;
+
+  if (!stripeConnectId) {
+    await storage.markEventProcessed(event.id);
+    return {
+      processed: true,
+      action: 'error',
+      reason: 'No Stripe Connect account ID in event - cannot determine tenant',
+    };
+  }
+
+  try {
+    const factory = await getStripeClientFactory();
+    let merchantId: string;
+
+    try {
+      const result = await factory.getClientByConnectId(stripeConnectId);
+      merchantId = result.merchantId;
+    } catch (err) {
+      await storage.markEventProcessed(event.id);
+      return {
+        processed: true,
+        action: 'error',
+        reason: `Unknown merchant for Connect ID ${stripeConnectId}`,
+      };
+    }
+
+    const subscriptionId = invoice.parent?.subscription_details?.subscription;
+    const task = await storage.createTask({
+      merchantId,
+      taskType: 'notify_action_required',
+      payload: {
+        eventId: event.id,
+        invoiceId: invoice.id,
+        customerId: typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id,
+        subscriptionId: typeof subscriptionId === 'string' ? subscriptionId : (subscriptionId as any)?.id || null,
+        amountDue: invoice.amount_due,
+        currency: invoice.currency,
+        hostedInvoiceUrl: invoice.hosted_invoice_url,
+      },
+      status: TaskStatus.PENDING,
+      runAt: new Date(),
+    });
+
+    await storage.createUsageLog({
+      merchantId,
+      metricType: 'action_required_notification',
+      amount: 1,
+    });
+
+    await storage.markEventProcessed(event.id);
+
+    return {
+      processed: true,
+      action: 'enqueued',
+      reason: `Action required notification task created for invoice ${invoice.id}`,
+      taskId: task.id,
+    };
+  } catch (error: any) {
+    return {
+      processed: false,
+      action: 'error',
+      reason: `Failed to create action required task: ${error.message}`,
+    };
+  }
 }

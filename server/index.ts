@@ -29,8 +29,6 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
-let webhookSecret: string | null = null;
-
 async function databaseWarmup() {
   try {
     log('Applying database performance tuning...', 'db');
@@ -73,24 +71,30 @@ async function initStripe() {
     const webhookBaseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
     const webhookUrl = `${webhookBaseUrl}/api/stripe/webhook`;
     
+    // Check for STRIPE_WEBHOOK_SECRET in environment
+    if (process.env.STRIPE_WEBHOOK_SECRET) {
+      log('Using STRIPE_WEBHOOK_SECRET from environment', 'stripe');
+    } else {
+      log('WARNING: STRIPE_WEBHOOK_SECRET not set - signature verification will be skipped', 'stripe');
+    }
+    
     try {
       const existingWebhooks = await platformClient.webhookEndpoints.list({ limit: 100 });
       const existingWebhook = existingWebhooks.data.find(wh => wh.url === webhookUrl);
       
       if (existingWebhook) {
         log(`Using existing webhook: ${existingWebhook.id}`, 'stripe');
-        webhookSecret = existingWebhook.secret || null;
       } else {
         const newWebhook = await platformClient.webhookEndpoints.create({
           url: webhookUrl,
           enabled_events: [
             'invoice.payment_failed',
             'invoice.payment_succeeded',
+            'invoice.payment_action_required',
             'customer.subscription.deleted',
             'charge.failed',
           ],
         });
-        webhookSecret = newWebhook.secret || null;
         log(`Created webhook: ${newWebhook.id}`, 'stripe');
       }
     } catch (webhookError: any) {
@@ -127,12 +131,15 @@ async function initStripe() {
         const stripe = new Stripe(secretKey, { apiVersion: '2025-11-17.clover' });
 
         let event: Stripe.Event;
+        
+        const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
         if (webhookSecret) {
           event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+          log(`Webhook signature verified for event ${event.id}`, 'stripe');
         } else {
           event = JSON.parse(req.body.toString()) as Stripe.Event;
-          log('Warning: Processing webhook without signature verification', 'stripe');
+          log('WARNING: Processing webhook without signature verification - set STRIPE_WEBHOOK_SECRET', 'stripe');
         }
 
         log(`Received webhook: ${event.type} (${event.id})`, 'stripe');
@@ -143,6 +150,10 @@ async function initStripe() {
 
         res.status(200).json({ received: true, result });
       } catch (error: any) {
+        if (error.type === 'StripeSignatureVerificationError') {
+          log(`Webhook signature verification failed: ${error.message}`, 'stripe');
+          return res.status(400).json({ error: 'Webhook signature verification failed' });
+        }
         log(`Webhook error: ${error.message}`, 'stripe');
         res.status(400).json({ error: 'Webhook processing error' });
       }
