@@ -1,6 +1,7 @@
 import { storage } from './storage';
 import { log } from './index';
 import { getStripeClientFactory } from './stripeClient';
+import { sendDunningEmail, sendActionRequiredEmail } from './email';
 import type { ScheduledTask, UsageLog } from '@shared/schema';
 
 const POLL_INTERVAL_MS = 1000;
@@ -14,7 +15,7 @@ async function processTask(task: ScheduledTask): Promise<void> {
       const factory = await getStripeClientFactory();
       const stripe = await factory.getClient(task.merchantId);
       
-      const payload = task.payload as { invoiceId: string };
+      const payload = task.payload as { invoiceId: string; attemptCount?: number };
       
       const invoice = await stripe.invoices.retrieve(payload.invoiceId);
       
@@ -26,17 +27,33 @@ async function processTask(task: ScheduledTask): Promise<void> {
       if (invoice.status === 'open') {
         const customerEmail = typeof invoice.customer_email === 'string' 
           ? invoice.customer_email 
-          : 'unknown';
+          : null;
         
-        log(`Simulation: Sending dunning email to ${customerEmail}`, 'worker');
+        if (!customerEmail) {
+          log(`No customer email for invoice ${payload.invoiceId}, skipping dunning`, 'worker');
+          return;
+        }
         
-        await storage.createUsageLog({
+        const emailSent = await sendDunningEmail(customerEmail, {
+          invoiceId: payload.invoiceId,
+          amountDue: invoice.amount_due,
+          currency: invoice.currency,
+          hostedInvoiceUrl: invoice.hosted_invoice_url,
+          attemptCount: payload.attemptCount,
           merchantId: task.merchantId,
-          metricType: 'dunning_email_sent',
-          amount: 1,
         });
         
-        log(`Usage log created for merchant ${task.merchantId}`, 'worker');
+        if (emailSent) {
+          await storage.createUsageLog({
+            merchantId: task.merchantId,
+            metricType: 'dunning_email_sent',
+            amount: 1,
+          });
+          
+          log(`Dunning email sent and usage logged for merchant ${task.merchantId}`, 'worker');
+        } else {
+          throw new Error('Failed to send dunning email');
+        }
       }
       break;
     }
@@ -48,8 +65,35 @@ async function processTask(task: ScheduledTask): Promise<void> {
     
     case 'notify_action_required': {
       log(`Processing action required notification for merchant ${task.merchantId}`, 'worker');
+      const factory = await getStripeClientFactory();
+      const stripe = await factory.getClient(task.merchantId);
+      
       const payload = task.payload as { invoiceId: string; hostedInvoiceUrl?: string };
-      log(`Simulation: Notifying customer about required action for invoice ${payload.invoiceId}`, 'worker');
+      
+      const invoice = await stripe.invoices.retrieve(payload.invoiceId);
+      
+      const customerEmail = typeof invoice.customer_email === 'string' 
+        ? invoice.customer_email 
+        : null;
+      
+      if (!customerEmail) {
+        log(`No customer email for invoice ${payload.invoiceId}, skipping action required notification`, 'worker');
+        return;
+      }
+      
+      const emailSent = await sendActionRequiredEmail(customerEmail, {
+        invoiceId: payload.invoiceId,
+        amountDue: invoice.amount_due,
+        currency: invoice.currency,
+        hostedInvoiceUrl: payload.hostedInvoiceUrl || invoice.hosted_invoice_url,
+        merchantId: task.merchantId,
+      });
+      
+      if (emailSent) {
+        log(`Action required email sent for invoice ${payload.invoiceId}`, 'worker');
+      } else {
+        throw new Error('Failed to send action required email');
+      }
       break;
     }
     
