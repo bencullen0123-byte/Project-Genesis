@@ -10,8 +10,11 @@ import Stripe from 'stripe';
 import { db } from './db';
 import { sql } from 'drizzle-orm';
 import { runCleanup } from './cron';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 const app = express();
+app.set('trust proxy', 1);
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -166,8 +169,33 @@ async function bootstrapWeeklyDigests() {
   await bootstrapReporter();
   await bootstrapWeeklyDigests();
 
+  // Security headers via helmet
+  app.use(helmet());
+  log('Security headers enabled via helmet', 'security');
+
+  // Global rate limiter: 100 requests per 15 minutes
+  const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later' },
+  });
+  app.use(globalLimiter);
+  log('Global rate limiter enabled (100 req/15 min)', 'security');
+
+  // Strict webhook rate limiter: 5 requests per minute per IP
+  const webhookLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Webhook rate limit exceeded' },
+  });
+
   app.post(
     '/api/stripe/webhook',
+    webhookLimiter,
     express.raw({ type: 'application/json' }),
     async (req, res) => {
       const signature = req.headers['stripe-signature'];
