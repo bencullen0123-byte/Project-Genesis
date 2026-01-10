@@ -1,13 +1,14 @@
 import { storage } from './storage';
 import { log } from './index';
 import { getStripeClientFactory } from './stripeClient';
-import { sendDunningEmail, sendActionRequiredEmail } from './email';
+import { sendDunningEmail, sendActionRequiredEmail, sendWeeklyDigest } from './email';
 import type { ScheduledTask, UsageLog } from '@shared/schema';
 
 const POLL_INTERVAL_MS = 1000;
 const ERROR_BACKOFF_MS = 5000;
 const TASK_FOUND_DELAY_MS = 100;
 const REPORT_USAGE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const WEEKLY_DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 async function processTask(task: ScheduledTask): Promise<void> {
   switch (task.taskType) {
@@ -97,6 +98,11 @@ async function processTask(task: ScheduledTask): Promise<void> {
       break;
     }
     
+    case 'send_weekly_digest': {
+      await processWeeklyDigest(task);
+      break;
+    }
+    
     default:
       log(`Unknown task type: ${task.taskType}`, 'worker');
   }
@@ -183,6 +189,46 @@ async function processReportUsage(task: ScheduledTask): Promise<void> {
   });
   
   log(`Scheduled next report_usage task at ${runAt.toISOString()}`, 'worker');
+}
+
+async function processWeeklyDigest(task: ScheduledTask): Promise<void> {
+  log(`Processing weekly digest for merchant ${task.merchantId}`, 'worker');
+  
+  const merchant = await storage.getMerchant(task.merchantId);
+  if (!merchant) {
+    log(`Merchant ${task.merchantId} not found, skipping weekly digest`, 'worker');
+    return;
+  }
+  
+  if (!merchant.email) {
+    log(`Merchant ${task.merchantId} has no email, skipping weekly digest`, 'worker');
+    return;
+  }
+  
+  const weeklyMetrics = await storage.getWeeklyMetrics(task.merchantId);
+  
+  const emailSent = await sendWeeklyDigest(merchant.email, {
+    totalRecoveredCents: weeklyMetrics.totalRecoveredCents,
+    totalEmailsSent: weeklyMetrics.totalEmailsSent,
+    merchantId: task.merchantId,
+  });
+  
+  if (emailSent) {
+    log(`Weekly digest sent to ${merchant.email}`, 'worker');
+  } else {
+    throw new Error('Failed to send weekly digest email');
+  }
+  
+  const runAt = new Date(Date.now() + WEEKLY_DIGEST_INTERVAL_MS);
+  await storage.createTask({
+    merchantId: task.merchantId,
+    taskType: 'send_weekly_digest',
+    payload: { scheduledBy: 'digest_cycle' },
+    status: 'pending',
+    runAt,
+  });
+  
+  log(`Scheduled next weekly digest at ${runAt.toISOString()}`, 'worker');
 }
 
 export function startWorker(): void {

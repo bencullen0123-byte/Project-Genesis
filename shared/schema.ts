@@ -6,6 +6,7 @@ import { z } from "zod";
 // 1. MERCHANTS TABLE - Multi-tenant support
 export const merchants = pgTable("merchants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email"),
   stripeConnectId: text("stripe_connect_id").unique(),
   stripeUserId: text("stripe_user_id"),
   accessToken: text("access_token"),

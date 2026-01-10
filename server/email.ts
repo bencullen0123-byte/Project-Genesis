@@ -59,6 +59,12 @@ export interface DunningEmailData {
   merchantId: string;
 }
 
+export interface WeeklyDigestData {
+  totalRecoveredCents: number;
+  totalEmailsSent: number;
+  merchantId: string;
+}
+
 export async function sendDunningEmail(
   to: string,
   data: DunningEmailData
@@ -239,6 +245,81 @@ If you have any questions, please contact our support team.
     }
 
     log(`Action required email sent to ${to} (ID: ${result.data?.id})`, 'email');
+    return true;
+  } catch (error: any) {
+    log(`Email error: ${error.message}`, 'email');
+    return false;
+  }
+}
+
+export async function sendWeeklyDigest(
+  to: string,
+  data: WeeklyDigestData
+): Promise<boolean> {
+  const recoveredDollars = (data.totalRecoveredCents / 100).toFixed(2);
+  
+  const subject = `Weekly Report: $${recoveredDollars} Recovered`;
+  
+  const htmlBody = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Weekly Report</title>
+</head>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h1 style="color: #333;">Weekly Report</h1>
+  
+  <p>We recovered <strong>$${recoveredDollars}</strong> for you this week.</p>
+  
+  <p>${data.totalEmailsSent} emails were sent to retain your customers.</p>
+  
+  <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+  
+  <p style="color: #999; font-size: 12px;">
+    This is your weekly payment recovery summary.
+  </p>
+</body>
+</html>
+  `.trim();
+
+  const textBody = `
+Weekly Report
+
+We recovered $${recoveredDollars} for you this week.
+
+${data.totalEmailsSent} emails were sent to retain your customers.
+
+This is your weekly payment recovery summary.
+  `.trim();
+
+  const resend = await getResendClient();
+  
+  if (!resend) {
+    log(`[DEV MODE] Weekly digest would be sent to: ${to}`, 'email');
+    log(`[DEV MODE] Subject: ${subject}`, 'email');
+    log(`[DEV MODE] Recovered: $${recoveredDollars}, Emails: ${data.totalEmailsSent}`, 'email');
+    return true;
+  }
+
+  try {
+    const result = await resend.client.emails.send({
+      from: resend.fromEmail,
+      to: [to],
+      subject,
+      html: htmlBody,
+      text: textBody,
+      headers: {
+        'X-Entity-Ref-ID': data.merchantId,
+      },
+    });
+
+    if (result.error) {
+      log(`Failed to send weekly digest: ${result.error.message}`, 'email');
+      return false;
+    }
+
+    log(`Weekly digest sent to ${to} (ID: ${result.data?.id})`, 'email');
     return true;
   } catch (error: any) {
     log(`Email error: ${error.message}`, 'email');

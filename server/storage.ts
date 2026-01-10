@@ -60,6 +60,13 @@ export interface IStorage {
     totalEmailsSent: number;
     daysTracked: number;
   }>;
+  getWeeklyMetrics(merchantId: string): Promise<{
+    totalRecoveredCents: number;
+    totalEmailsSent: number;
+  }>;
+  
+  // Weekly Digest Tasks
+  hasWeeklyDigestTask(merchantId: string): Promise<boolean>;
 
   // Dashboard Stats
   getDashboardStats(): Promise<{
@@ -371,6 +378,38 @@ export class DatabaseStorage implements IStorage {
       totalEmailsSent: result?.totalEmailsSent || 0,
       daysTracked: result?.daysTracked || 0,
     };
+  }
+
+  async getWeeklyMetrics(merchantId: string): Promise<{
+    totalRecoveredCents: number;
+    totalEmailsSent: number;
+  }> {
+    const [result] = await db.select({
+      totalRecoveredCents: sql<number>`COALESCE(SUM(recovered_cents), 0)::bigint`,
+      totalEmailsSent: sql<number>`COALESCE(SUM(emails_sent), 0)::int`,
+    })
+    .from(dailyMetrics)
+    .where(and(
+      eq(dailyMetrics.merchantId, merchantId),
+      sql`metric_date >= CURRENT_DATE - INTERVAL '7 days'`
+    ));
+    
+    return {
+      totalRecoveredCents: Number(result?.totalRecoveredCents || 0),
+      totalEmailsSent: result?.totalEmailsSent || 0,
+    };
+  }
+
+  async hasWeeklyDigestTask(merchantId: string): Promise<boolean> {
+    const [existing] = await db.select({ id: scheduledTasks.id })
+      .from(scheduledTasks)
+      .where(and(
+        eq(scheduledTasks.merchantId, merchantId),
+        eq(scheduledTasks.taskType, 'send_weekly_digest'),
+        sql`status IN ('pending', 'running')`
+      ))
+      .limit(1);
+    return !!existing;
   }
 
   // Dashboard Stats
