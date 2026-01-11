@@ -147,65 +147,15 @@ export async function registerRoutes(
     }
   });
 
-  // Merchants
-  app.get("/api/merchants", async (req, res) => {
-    try {
-      const merchants = await storage.getMerchants();
-      res.json(merchants);
-    } catch (error) {
-      console.error("Get merchants error:", error);
-      res.status(500).json({ error: "Failed to fetch merchants" });
-    }
-  });
-
-  app.get("/api/merchants/:id", async (req, res) => {
-    try {
-      const merchant = await storage.getMerchant(req.params.id);
-      if (!merchant) {
-        return res.status(404).json({ error: "Merchant not found" });
-      }
-      res.json(merchant);
-    } catch (error) {
-      console.error("Get merchant error:", error);
-      res.status(500).json({ error: "Failed to fetch merchant" });
-    }
-  });
-
-  app.post("/api/merchants", async (req, res) => {
-    try {
-      const validated = insertMerchantSchema.parse(req.body);
-      const merchant = await storage.createMerchant(validated);
-      res.status(201).json(merchant);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Invalid merchant data", details: error.errors });
-      }
-      console.error("Create merchant error:", error);
-      res.status(500).json({ error: "Failed to create merchant" });
-    }
-  });
-
-  // Update merchant billing info (secured via Stripe Connect ID verification)
-  // IDOR Prevention: Requires X-Merchant-Stripe-Id header matching the merchant's Stripe Connect ID
-  app.patch("/api/merchants/:id", async (req, res) => {
+  // Update merchant billing info (ownership via authenticated merchant)
+  app.patch("/api/merchants/:id", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const { id } = req.params;
-      const stripeConnectId = req.headers["x-merchant-stripe-id"] as string;
-
-      // Require Stripe Connect ID header for authorization
-      if (!stripeConnectId) {
-        return res.status(401).json({ message: "Authorization required" });
-      }
-
-      const merchant = await storage.getMerchant(id);
-      if (!merchant) {
-        return res.status(404).json({ message: "Not found" });
-      }
-
-      // SECURE: Verify the caller knows the merchant's Stripe Connect ID
-      if (merchant.stripeConnectId !== stripeConnectId) {
-        log(`Security Alert: Unauthorized update for merchant ${id}`, 'security', 'error');
-        return res.status(403).json({ message: "Forbidden" });
+      
+      // Ownership check: only allow updating your own merchant record
+      if (id !== req.merchant!.id) {
+        log(`Security Alert: Unauthorized update attempt for merchant ${id} by ${req.merchant!.id}`, 'security', 'error');
+        return res.sendStatus(403);
       }
 
       const { billingCountry, billingAddress, email } = req.body;
@@ -228,11 +178,11 @@ export async function registerRoutes(
     }
   });
 
-  // Activity Logs
-  app.get("/api/activity", async (req, res) => {
+  // Activity Logs (protected - only show authenticated merchant's logs)
+  app.get("/api/activity", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const metricType = req.query.metricType as string | undefined;
-      const logs = await storage.getUsageLogs(undefined, metricType, 100);
+      const logs = await storage.getUsageLogs(req.merchant!.id, metricType, 100);
       res.json(logs);
     } catch (error) {
       console.error("Get activity error:", error);
