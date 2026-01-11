@@ -1,5 +1,6 @@
-import { LayoutDashboard, ListTodo, Users, Activity, Settings, Zap } from "lucide-react";
+import { LayoutDashboard, ListTodo, Activity, Settings, Zap } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { UserButton } from "@clerk/clerk-react";
 import {
   Sidebar,
   SidebarContent,
@@ -12,7 +13,6 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { DisconnectStripeButton } from "@/components/disconnect-stripe-button";
 
 const menuItems = [
   {
@@ -22,13 +22,8 @@ const menuItems = [
   },
   {
     title: "Task Queue",
-    url: "/queue",
+    url: "/tasks",
     icon: ListTodo,
-  },
-  {
-    title: "Merchants",
-    url: "/merchants",
-    icon: Users,
   },
   {
     title: "Activity Log",
@@ -99,10 +94,20 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="p-4 border-t border-sidebar-border space-y-3">
         <div className="flex items-center gap-2">
-          <div className="h-2 w-2 rounded-full bg-status-online" />
+          <div className="h-2 w-2 rounded-full bg-green-500" />
           <span className="text-xs text-muted-foreground">System Online</span>
         </div>
-        <DisconnectStripeButton merchantId="m1-demo-merchant" />
+        <div className="flex items-center gap-3">
+          <UserButton 
+            afterSignOutUrl="/" 
+            appearance={{
+              elements: {
+                avatarBox: "h-8 w-8"
+              }
+            }}
+          />
+          <span className="text-sm text-muted-foreground">Account</span>
+        </div>
       </SidebarFooter>
     </Sidebar>
   );

@@ -1,12 +1,48 @@
-import { ClerkProvider, SignedIn, SignedOut, RedirectToSignIn, useAuth, UserButton } from "@clerk/clerk-react";
+import { ClerkProvider, SignedIn, SignedOut, RedirectToSignIn, useAuth } from "@clerk/clerk-react";
+import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { AppSidebar } from "@/components/app-sidebar";
+import Dashboard from "@/pages/dashboard";
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
+function Router() {
+  return (
+    <Switch>
+      <Route path="/" component={Dashboard} />
+      <Route path="/tasks">
+        <div className="p-8">
+          <h1 className="text-2xl font-semibold mb-4">Task Queue</h1>
+          <p className="text-muted-foreground">Task management coming soon.</p>
+        </div>
+      </Route>
+      <Route path="/activity">
+        <div className="p-8">
+          <h1 className="text-2xl font-semibold mb-4">Activity Log</h1>
+          <p className="text-muted-foreground">Full activity log coming soon.</p>
+        </div>
+      </Route>
+      <Route path="/settings">
+        <div className="p-8">
+          <h1 className="text-2xl font-semibold mb-4">Settings</h1>
+          <p className="text-muted-foreground">Settings page coming soon.</p>
+        </div>
+      </Route>
+      <Route>
+        <div className="p-8">
+          <h1 className="text-2xl font-semibold mb-4">Page Not Found</h1>
+          <p className="text-muted-foreground">The page you're looking for doesn't exist.</p>
+        </div>
+      </Route>
+    </Switch>
+  );
+}
+
 function AuthenticatedApp() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded } = useAuth();
 
   if (!isLoaded) {
     return (
@@ -16,24 +52,27 @@ function AuthenticatedApp() {
     );
   }
 
+  const sidebarStyle = {
+    "--sidebar-width": "16rem",
+    "--sidebar-width-icon": "3rem",
+  };
+
   return (
     <>
       <SignedIn>
-        <div className="flex items-center justify-center h-screen bg-background">
-          <div className="text-center p-8">
-            <div className="absolute top-4 right-4">
-              <UserButton afterSignOutUrl="/" data-testid="button-user-menu" />
-            </div>
-            <h1 className="text-3xl font-bold text-foreground mb-4" data-testid="text-title">The Citadel</h1>
-            <p className="text-muted-foreground mb-6">Multi-Tenant Stripe Recovery Engine</p>
-            <p className="text-sm text-muted-foreground">Welcome! You are authenticated.</p>
-            <div className="mt-8 p-4 bg-card rounded-lg border">
-              <p className="text-sm font-mono text-muted-foreground" data-testid="text-api-info">
-                API Endpoints: /api/dashboard, /api/tasks, /api/merchants/me
-              </p>
-            </div>
+        <SidebarProvider style={sidebarStyle as React.CSSProperties}>
+          <div className="flex h-screen w-full bg-background">
+            <AppSidebar />
+            <main className="flex-1 overflow-y-auto">
+              <header className="flex items-center gap-2 p-4 border-b sticky top-0 bg-background z-10">
+                <SidebarTrigger data-testid="button-sidebar-toggle" />
+              </header>
+              <div className="p-6">
+                <Router />
+              </div>
+            </main>
           </div>
-        </div>
+        </SidebarProvider>
       </SignedIn>
       <SignedOut>
         <RedirectToSignIn signInFallbackRedirectUrl="/" />
