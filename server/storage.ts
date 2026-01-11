@@ -47,6 +47,7 @@ export interface IStorage {
   getMerchants(): Promise<Merchant[]>;
   createMerchant(merchant: InsertMerchant): Promise<Merchant>;
   updateMerchant(id: string, data: Partial<InsertMerchant>): Promise<Merchant | undefined>;
+  deleteMerchant(id: string): Promise<boolean>;
 
   // Tasks - with SELECT FOR UPDATE SKIP LOCKED for concurrency
   getTask(id: number): Promise<ScheduledTask | undefined>;
@@ -65,6 +66,7 @@ export interface IStorage {
   getMonthlyDunningCount(merchantId: string): Promise<number>;
   getPendingUsageLogs(limit: number): Promise<UsageLog[]>;
   markUsageAsReported(ids: number[]): Promise<void>;
+  deleteUsageLogs(merchantId: string): Promise<number>;
   
   // Reporter Tasks
   hasReportUsageTask(): Promise<boolean>;
@@ -134,6 +136,11 @@ export class DatabaseStorage implements IStorage {
     const encryptedData = encryptMerchantData(data);
     const [updated] = await db.update(merchants).set(encryptedData).where(eq(merchants.id, id)).returning();
     return updated ? decryptMerchant(updated) : undefined;
+  }
+
+  async deleteMerchant(id: string): Promise<boolean> {
+    const result = await db.delete(merchants).where(eq(merchants.id, id)).returning();
+    return result.length > 0;
   }
 
   // Tasks with SELECT FOR UPDATE SKIP LOCKED
@@ -332,6 +339,13 @@ export class DatabaseStorage implements IStorage {
     await db.update(usageLogs)
       .set({ reportedAt: sql`NOW()` })
       .where(sql`id = ANY(ARRAY[${sql.raw(ids.join(','))}]::int[])`);
+  }
+
+  async deleteUsageLogs(merchantId: string): Promise<number> {
+    const result = await db.delete(usageLogs)
+      .where(eq(usageLogs.merchantId, merchantId))
+      .returning();
+    return result.length;
   }
 
   async hasReportUsageTask(): Promise<boolean> {
