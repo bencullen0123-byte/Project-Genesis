@@ -271,57 +271,67 @@ export async function registerRoutes(
     }
   });
 
-  // Stripe Connect OAuth - Callback endpoint
-  app.get("/api/stripe/connect/callback", async (req, res) => {
-    try {
-      const { code, state, error: oauthError, error_description } = req.query;
+  // SECURE: Stripe Connect OAuth Callback (CSRF Protected)
+  app.get(
+    "/api/stripe/connect/callback",
+    requireAuth(),     // 1. Must be logged in via Clerk
+    requireMerchant,   // 2. Must have a merchant record
+    async (req, res) => {
+      try {
+        const { code, state, error: oauthError, error_description } = req.query;
+        const merchant = req.merchant!; // 3. Use the SESSION merchant, not a DB lookup
 
-      if (oauthError) {
-        console.error("OAuth error:", oauthError, error_description);
-        return res.redirect(`/?error=${encodeURIComponent(error_description as string || 'OAuth failed')}`);
+        // A. Handle Stripe Errors
+        if (oauthError) {
+          console.error("OAuth error:", oauthError, error_description);
+          return res.redirect(`/?error=${encodeURIComponent(error_description as string || 'OAuth failed')}`);
+        }
+
+        // B. Validate Inputs
+        if (!code || !state) {
+          return res.redirect('/?error=Missing authorization code or state');
+        }
+
+        // C. CSRF CHECK (The Fix)
+        // Ensure the state in the URL matches the state we saved in the user's DB record
+        if (!merchant.oauthState || merchant.oauthState !== state) {
+          log(`CSRF Mismatch for merchant ${merchant.id}. Expected ${merchant.oauthState}, got ${state}`, 'security', 'error');
+          return res.redirect('/?error=Security violation: Invalid or expired state token');
+        }
+
+        // D. Token Exchange (Proceed as normal)
+        const factory = await getStripeClientFactory();
+        const platformClient = factory.getPlatformClient();
+
+        const response = await platformClient.oauth.token({
+          grant_type: 'authorization_code',
+          code: code as string,
+        });
+
+        // E. Save Credentials & Clear State
+        await storage.updateMerchant(merchant.id, {
+          stripeConnectId: response.stripe_user_id,
+          stripeUserId: response.stripe_user_id,
+          accessToken: response.access_token,
+          refreshToken: response.refresh_token || null,
+          oauthState: null, // Clear state to prevent replay
+        });
+
+        await storage.createUsageLog({
+          merchantId: merchant.id,
+          metricType: 'merchant_connected',
+          amount: 1,
+        });
+
+        log(`Merchant ${merchant.id} securely connected Stripe account ${response.stripe_user_id}`, 'auth');
+
+        res.redirect('/?connected=true');
+      } catch (error: any) {
+        console.error("Stripe connect callback error:", error);
+        res.redirect(`/?error=${encodeURIComponent(error.message || 'Connection failed')}`);
       }
-
-      if (!code || !state) {
-        return res.redirect('/?error=Missing authorization code or state');
-      }
-
-      const merchant = await storage.getMerchantByOAuthState(state as string);
-      
-      if (!merchant) {
-        console.error("Invalid OAuth state:", state);
-        return res.redirect('/?error=Invalid or expired state token');
-      }
-
-      const factory = await getStripeClientFactory();
-      const platformClient = factory.getPlatformClient();
-
-      const response = await platformClient.oauth.token({
-        grant_type: 'authorization_code',
-        code: code as string,
-      });
-
-      await storage.updateMerchant(merchant.id, {
-        stripeConnectId: response.stripe_user_id,
-        stripeUserId: response.stripe_user_id,
-        accessToken: response.access_token,
-        refreshToken: response.refresh_token || null,
-        oauthState: null,
-      });
-
-      await storage.createUsageLog({
-        merchantId: merchant.id,
-        metricType: 'merchant_connected',
-        amount: 1,
-      });
-
-      console.log(`Merchant ${merchant.id} connected with Stripe account ${response.stripe_user_id}`);
-
-      res.redirect('/?connected=true');
-    } catch (error: any) {
-      console.error("Stripe connect callback error:", error);
-      res.redirect(`/?error=${encodeURIComponent(error.message || 'Connection failed')}`);
     }
-  });
+  );
 
   // Stripe Connect - Disconnect (Kill Switch)
   app.post("/api/stripe/disconnect", async (req, res) => {
