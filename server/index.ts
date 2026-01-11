@@ -327,4 +327,16 @@ async function bootstrapWeeklyDigests() {
       log('Janitor started (cleanup every 10 minutes)', 'cron');
     },
   );
+
+  // Graceful shutdown handlers
+  const shutdown = (signal: string) => {
+    log(`Received ${signal}, shutting down gracefully...`, 'system');
+    httpServer.close(() => {
+      log('Server closed, exiting', 'system');
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 })();

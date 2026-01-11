@@ -395,7 +395,9 @@ export async function registerRoutes(
         });
 
         for (const sub of subscriptions.data) {
-          await tenantClient.subscriptions.cancel(sub.id);
+          await tenantClient.subscriptions.cancel(sub.id, undefined, {
+            idempotencyKey: `cancel_sub_${merchantId}_${sub.id}`,
+          });
           console.log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`);
         }
       } catch (subError: any) {
@@ -409,6 +411,8 @@ export async function registerRoutes(
           await platformClient.oauth.deauthorize({
             client_id: clientId,
             stripe_user_id: merchant.stripeUserId,
+          }, {
+            idempotencyKey: `deauth_${merchantId}_${merchant.stripeUserId}`,
           });
           console.log(`Deauthorized Stripe account ${merchant.stripeUserId}`);
         }
