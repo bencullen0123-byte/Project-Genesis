@@ -251,6 +251,13 @@ The weekly digest provides merchants with "proof of value" emails:
 - `send_weekly_digest` - Weekly "proof of value" email to merchants (self-scheduling every 7 days)
 
 ## Recent Changes
+- 2026-01-11: Sprint 6 Complete - Security & Reliability
+  - The Vault: Created server/lib/encryption.ts with AES-256-GCM encrypt/decrypt functions
+  - Storage Hardening: accessToken and refreshToken are now encrypted at rest
+  - Financial Integrity: Added idempotencyKey to all Stripe mutations (subscriptions.cancel, oauth.deauthorize, meterEvents.create)
+  - Graceful Shutdown: SIGTERM/SIGINT handlers for clean server termination
+  - Database Indexes: migrations/0002_add_indexes.sql with scheduled_tasks and merchants indexes
+
 - 2026-01-10: Sprint 5 Hotfix - Security & Integrity
   - IDOR Fix: PATCH /api/merchants/:id now requires X-Merchant-Stripe-Id header matching merchant's Stripe Connect ID
   - Authorization flow: 401 if header missing, 403 if header doesn't match stored stripeConnectId
