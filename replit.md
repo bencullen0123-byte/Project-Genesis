@@ -57,8 +57,10 @@ Sends weekly "proof of value" emails to merchants, aggregating recovery metrics 
 -   **Idempotency**: `idempotencyKey` is used for all Stripe mutations.
 -   **Graceful Shutdown**: SIGTERM/SIGINT handlers ensure clean server termination.
 -   **Database Indexes**: Applied to `scheduled_tasks` and `merchants` for performance.
--   **IDOR Fix**: PATCH requests to `/api/merchants/:id` require `X-Merchant-Stripe-Id` header for authorization.
+-   **IDOR Fix**: PATCH requests to `/api/merchants/:id` use ownership check via `req.merchant.id` (authenticated user must own the merchant record).
 -   **Authentication**: Clerk Authentication for user management and auto-provisioning of new users as FREE tier merchants.
+-   **Data Leak Prevention**: GET `/api/merchants` and GET `/api/merchants/:id` routes removed. Use `/api/merchants/me` for authenticated merchant data.
+-   **Activity Log Isolation**: GET `/api/activity` requires authentication and filters logs by authenticated merchant ID.
 
 ### Task Types Supported
 -   `dunning_retry`: Process failed subscription payments.
