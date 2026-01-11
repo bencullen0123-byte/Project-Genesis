@@ -1,0 +1,82 @@
+SYSTEM DIRECTIVE: SPRINT 9.5 - TICKET 1 (OAUTH CSRF LOCKDOWN)
+
+Objective: Secure the Stripe Connect callback route to prevent Account Takeover via CSRF.
+
+The Vulnerability: Currently, GET /api/stripe/connect/callback is public. It looks up the merchant using the state param. If an attacker sends a victim a link with the attacker's valid state/code, the victim's account binds to the attacker's Stripe account.
+
+The Fix Strategy:
+
+Authenticate: The user must be logged in to complete the connection.
+
+Bind: We use req.merchant (from the session) as the source of truth.
+
+Verify: We explicitly check merchant.oauthState === req.query.state.
+
+Task Execution:
+
+File: server/routes.ts
+
+Action: Locate app.get("/api/stripe/connect/callback", ...) and completely replace its implementation with this secure logic:
+
+TypeScript
+
+  // SECURE: Stripe Connect OAuth Callback
+  app.get(
+    "/api/stripe/connect/callback",
+    requireAuth(),     // 1. Must be logged in via Clerk
+    requireMerchant,   // 2. Must have a merchant record
+    async (req, res) => {
+      try {
+        const { code, state, error: oauthError, error_description } = req.query;
+        const merchant = req.merchant!; // 3. Use the SESSION merchant, not a DB lookup
+    // A. Handle Stripe Errors
+    if (oauthError) {
+      console.error("OAuth error:", oauthError, error_description);
+      return res.redirect(`/?error=${encodeURIComponent(error_description as string || 'OAuth failed')}`);
+    }
+    // B. Validate Inputs
+    if (!code || !state) {
+      return res.redirect('/?error=Missing authorization code or state');
+    }
+    // C. CSRF CHECK (The Fix)
+    // Ensure the state in the URL matches the state we saved in the user's DB record
+    if (!merchant.oauthState || merchant.oauthState !== state) {
+      console.error(`CSRF Mismatch for merchant ${merchant.id}. Expected ${merchant.oauthState}, got ${state}`);
+      return res.redirect('/?error=Security violation: Invalid or expired state token');
+    }
+    // D. Token Exchange (Proceed as normal)
+    const factory = await getStripeClientFactory();
+    const platformClient = factory.getPlatformClient();
+    const response = await platformClient.oauth.token({
+      grant_type: 'authorization_code',
+      code: code as string,
+    });
+    // E. Save Credentials & Clear State
+    await storage.updateMerchant(merchant.id, {
+      stripeConnectId: response.stripe_user_id,
+      stripeUserId: response.stripe_user_id,
+      accessToken: response.access_token,
+      refreshToken: response.refresh_token || null,
+      oauthState: null, // Clear state to prevent replay
+    });
+    await storage.createUsageLog({
+      merchantId: merchant.id,
+      metricType: 'merchant_connected',
+      amount: 1,
+    });
+    log(`Merchant ${merchant.id} securely connected Stripe account ${response.stripe_user_id}`, 'auth');
+    res.redirect('/?connected=true');
+  } catch (error: any) {
+    console.error("Stripe connect callback error:", error);
+    res.redirect(`/?error=${encodeURIComponent(error.message || 'Connection failed')}`);
+  }
+}
+);
+
+
+**Verification Protocol:**
+Open an Incognito window.
+
+Try to visit /api/stripe/connect/callback?code=123&state=abc.
+
+Result: You should be redirected to the Clerk Sign-In page (Auth Guard success).
