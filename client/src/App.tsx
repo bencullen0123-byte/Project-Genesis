@@ -36,7 +36,7 @@ function AuthenticatedApp() {
         </div>
       </SignedIn>
       <SignedOut>
-        <RedirectToSignIn />
+        <RedirectToSignIn signInFallbackRedirectUrl="/" />
       </SignedOut>
     </>
   );
@@ -63,7 +63,10 @@ function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
+    <ClerkProvider 
+      publishableKey={PUBLISHABLE_KEY}
+      afterSignOutUrl="/"
+    >
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <AuthenticatedApp />
