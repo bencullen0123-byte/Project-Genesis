@@ -168,8 +168,22 @@ async function bootstrapWeeklyDigests() {
   await bootstrapReporter();
   await bootstrapWeeklyDigests();
 
-  // Security headers via helmet
-  app.use(helmet());
+  // Security headers via helmet (configured for Clerk + Vite dev)
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://*.clerk.accounts.dev", "https://clerk.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        connectSrc: ["'self'", "https://*.clerk.accounts.dev", "https://clerk.com", "wss:", "ws:"],
+        frameSrc: ["'self'", "https://*.clerk.accounts.dev"],
+        workerSrc: ["'self'", "blob:"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  }));
   log('Security headers enabled via helmet', 'security');
 
   // Global rate limiter: 100 requests per 15 minutes
