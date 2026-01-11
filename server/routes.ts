@@ -448,6 +448,59 @@ export async function registerRoutes(
     }
   });
 
+  // GDPR Right to Erasure (Article 17) - Admin Only
+  app.delete("/api/admin/merchants/:id", async (req, res) => {
+    const adminKey = req.headers['x-admin-key'] as string | undefined;
+    const envAdminKey = process.env.ADMIN_KEY;
+
+    // Fail safe: reject all if ADMIN_KEY not configured
+    if (!envAdminKey) {
+      log('GDPR erasure rejected: ADMIN_KEY not configured', 'admin', 'warn');
+      res.status(403).json({ error: 'Forbidden', message: 'Admin access not configured' });
+      return;
+    }
+
+    if (!adminKey || adminKey !== envAdminKey) {
+      log('GDPR erasure rejected: invalid admin key', 'admin', 'warn');
+      res.status(403).json({ error: 'Forbidden', message: 'Invalid admin credentials' });
+      return;
+    }
+
+    const merchantId = req.params.id;
+
+    try {
+      // Verify merchant exists
+      const merchant = await storage.getMerchant(merchantId);
+      if (!merchant) {
+        res.status(404).json({ error: 'Not Found', message: 'Merchant not found' });
+        return;
+      }
+
+      // Cascade delete: tasks first
+      const deletedTasks = await storage.deletePendingTasks(merchantId);
+      
+      // Delete usage logs
+      const deletedLogs = await storage.deleteUsageLogs(merchantId);
+      
+      // Delete merchant record
+      await storage.deleteMerchant(merchantId);
+
+      log(`GDPR Erasure executed for merchant ${merchantId} (tasks: ${deletedTasks}, logs: ${deletedLogs})`, 'admin');
+
+      res.json({ 
+        success: true, 
+        message: 'Merchant data permanently erased',
+        deleted: {
+          tasks: deletedTasks,
+          usageLogs: deletedLogs
+        }
+      });
+    } catch (error: any) {
+      log(`GDPR erasure failed for merchant ${merchantId}: ${error.message}`, 'admin', 'error');
+      res.status(500).json({ error: 'Internal Server Error', message: 'Failed to erase merchant data' });
+    }
+  });
+
   // Health check
   app.get("/api/health", async (req, res) => {
     try {
