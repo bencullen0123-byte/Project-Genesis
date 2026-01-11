@@ -84,19 +84,33 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/tasks", checkUsageLimits, async (req, res) => {
-    try {
-      const validated = insertScheduledTaskSchema.parse(req.body);
-      const task = await storage.createTask(validated);
-      res.status(201).json(task);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Invalid task data", details: error.errors });
+  // SECURE: Create Task (Protected & Scoped)
+  app.post(
+    "/api/tasks",
+    requireAuth(),      // 1. Authenticate
+    requireMerchant,    // 2. Load Merchant Context
+    checkUsageLimits,   // 3. Enforce Quotas
+    async (req, res) => {
+      try {
+        // Parse body but IGNORE the merchantId provided by the client
+        const body = insertScheduledTaskSchema.parse(req.body);
+
+        // 4. Force Merchant ID from Session (The Fix)
+        const task = await storage.createTask({
+          ...body,
+          merchantId: req.merchant!.id // <--- CRITICAL SECURITY OVERRIDE
+        });
+
+        res.status(201).json(task);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({ error: "Invalid task data", details: error.errors });
+        }
+        console.error("Create task error:", error);
+        res.status(500).json({ error: "Failed to create task" });
       }
-      console.error("Create task error:", error);
-      res.status(500).json({ error: "Failed to create task" });
     }
-  });
+  );
 
   app.post("/api/tasks/:id/retry", async (req, res) => {
     try {
