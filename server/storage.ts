@@ -75,6 +75,7 @@ export interface IStorage {
   // Processed Events - Idempotency
   hasProcessedEvent(eventId: string): Promise<boolean>;
   markEventProcessed(eventId: string): Promise<ProcessedEvent>;
+  attemptEventLock(eventId: string): Promise<boolean>;
 
   // Daily Metrics
   getDailyMetrics(merchantId: string, days?: number): Promise<DailyMetric[]>;
@@ -373,6 +374,14 @@ export class DatabaseStorage implements IStorage {
   async markEventProcessed(eventId: string): Promise<ProcessedEvent> {
     const [created] = await db.insert(processedEvents).values({ eventId }).returning();
     return created;
+  }
+
+  async attemptEventLock(eventId: string): Promise<boolean> {
+    const [locked] = await db.insert(processedEvents)
+      .values({ eventId })
+      .onConflictDoNothing()
+      .returning();
+    return !!locked;
   }
 
   // Daily Metrics

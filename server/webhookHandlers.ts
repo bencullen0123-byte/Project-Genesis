@@ -13,15 +13,19 @@ export interface WebhookResult {
 export async function handleStripeWebhook(event: Stripe.Event): Promise<WebhookResult> {
   const eventId = event.id;
 
-  const alreadyProcessed = await storage.hasProcessedEvent(eventId);
-  if (alreadyProcessed) {
+  // 1. ATOMIC LOCK (The Fix)
+  // Try to insert. If it exists, this returns false immediately.
+  const isFirstProcessing = await storage.attemptEventLock(eventId);
+
+  if (!isFirstProcessing) {
     return {
       processed: false,
       action: 'ignored',
-      reason: `Event ${eventId} already processed (idempotency check)`,
+      reason: `Event ${eventId} handled by parallel worker (idempotency lock)`,
     };
   }
 
+  // 2. Process (No need to mark processed again - we already locked it)
   switch (event.type) {
     case 'invoice.payment_failed':
       return handleInvoicePaymentFailed(event);
@@ -36,7 +40,6 @@ export async function handleStripeWebhook(event: Stripe.Event): Promise<WebhookR
       return handleChargeFailed(event);
 
     default:
-      await storage.markEventProcessed(eventId);
       return {
         processed: true,
         action: 'ignored',
@@ -50,7 +53,6 @@ async function handleInvoicePaymentFailed(event: Stripe.Event): Promise<WebhookR
   const billingReason = invoice.billing_reason;
 
   if (billingReason === 'subscription_create') {
-    await storage.markEventProcessed(event.id);
     return {
       processed: true,
       action: 'ignored',
@@ -63,7 +65,6 @@ async function handleInvoicePaymentFailed(event: Stripe.Event): Promise<WebhookR
   }
 
   if (billingReason === 'subscription_update') {
-    await storage.markEventProcessed(event.id);
     return {
       processed: true,
       action: 'ignored',
@@ -72,7 +73,6 @@ async function handleInvoicePaymentFailed(event: Stripe.Event): Promise<WebhookR
   }
 
   if (billingReason === 'manual') {
-    await storage.markEventProcessed(event.id);
     return {
       processed: true,
       action: 'ignored', 
@@ -80,7 +80,6 @@ async function handleInvoicePaymentFailed(event: Stripe.Event): Promise<WebhookR
     };
   }
 
-  await storage.markEventProcessed(event.id);
   return {
     processed: true,
     action: 'ignored',
@@ -93,7 +92,6 @@ async function enqueueDunningTask(event: Stripe.Event, invoice: Stripe.Invoice):
     const stripeConnectId = event.account;
     
     if (!stripeConnectId) {
-      await storage.markEventProcessed(event.id);
       return {
         processed: true,
         action: 'error',
@@ -108,7 +106,6 @@ async function enqueueDunningTask(event: Stripe.Event, invoice: Stripe.Invoice):
       const result = await factory.getClientByConnectId(stripeConnectId);
       merchantId = result.merchantId;
     } catch (err) {
-      await storage.markEventProcessed(event.id);
       return {
         processed: true,
         action: 'error',
@@ -144,8 +141,6 @@ async function enqueueDunningTask(event: Stripe.Event, invoice: Stripe.Invoice):
       amount: 1,
     });
 
-    await storage.markEventProcessed(event.id);
-
     return {
       processed: true,
       action: 'enqueued',
@@ -178,7 +173,6 @@ async function handleSubscriptionDeleted(event: Stripe.Event): Promise<WebhookRe
   const stripeConnectId = event.account;
 
   if (!stripeConnectId) {
-    await storage.markEventProcessed(event.id);
     return {
       processed: true,
       action: 'ignored',
@@ -196,15 +190,12 @@ async function handleSubscriptionDeleted(event: Stripe.Event): Promise<WebhookRe
       amount: 1,
     });
 
-    await storage.markEventProcessed(event.id);
-
     return {
       processed: true,
       action: 'ignored',
       reason: `Subscription ${subscription.id} churned - logged for analytics`,
     };
   } catch (err: any) {
-    await storage.markEventProcessed(event.id);
     return {
       processed: true,
       action: 'error',
@@ -214,8 +205,6 @@ async function handleSubscriptionDeleted(event: Stripe.Event): Promise<WebhookRe
 }
 
 async function handleChargeFailed(event: Stripe.Event): Promise<WebhookResult> {
-  await storage.markEventProcessed(event.id);
-  
   return {
     processed: true,
     action: 'ignored',
@@ -228,7 +217,6 @@ async function handlePaymentActionRequired(event: Stripe.Event): Promise<Webhook
   const stripeConnectId = event.account;
 
   if (!stripeConnectId) {
-    await storage.markEventProcessed(event.id);
     return {
       processed: true,
       action: 'error',
@@ -244,7 +232,6 @@ async function handlePaymentActionRequired(event: Stripe.Event): Promise<Webhook
       const result = await factory.getClientByConnectId(stripeConnectId);
       merchantId = result.merchantId;
     } catch (err) {
-      await storage.markEventProcessed(event.id);
       return {
         processed: true,
         action: 'error',
@@ -274,8 +261,6 @@ async function handlePaymentActionRequired(event: Stripe.Event): Promise<Webhook
       metricType: 'action_required_notification',
       amount: 1,
     });
-
-    await storage.markEventProcessed(event.id);
 
     return {
       processed: true,
