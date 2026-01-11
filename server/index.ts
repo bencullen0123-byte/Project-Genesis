@@ -12,6 +12,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { runCleanup } from './cron';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { logger } from './lib/logger';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -26,19 +27,12 @@ declare module "http" {
 type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
 export function log(message: string, source = "express", level: LogLevel = "info") {
-  const logEntry = {
-    level,
-    time: Date.now(),
-    msg: message,
-    source,
-  };
-  
-  if (level === 'error') {
-    console.error(JSON.stringify(logEntry));
-  } else if (level === 'warn') {
-    console.warn(JSON.stringify(logEntry));
-  } else {
-    console.log(JSON.stringify(logEntry));
+  const logData = { source, msg: message };
+  switch (level) {
+    case 'error': logger.error(logData); break;
+    case 'warn': logger.warn(logData); break;
+    case 'debug': logger.debug(logData); break;
+    default: logger.info(logData);
   }
 }
 
