@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { storage } from './storage';
 import { log } from './index';
-
-const MONTHLY_LIMIT = 1000;
+import { PLANS } from '@shared/plans';
 
 export async function checkUsageLimits(
   req: Request, 
@@ -17,16 +16,27 @@ export async function checkUsageLimits(
   }
 
   try {
+    const merchant = await storage.getMerchant(merchantId);
+    
+    if (!merchant) {
+      next();
+      return;
+    }
+
+    const plan = PLANS[merchant.subscriptionPlanId || ''] || PLANS['default'];
+    const limit = plan.limit;
+
     const monthlyCount = await storage.getMonthlyDunningCount(merchantId);
     
-    if (monthlyCount >= MONTHLY_LIMIT) {
-      log(`Usage limit exceeded for merchant ${merchantId}: ${monthlyCount}/${MONTHLY_LIMIT}`, 'middleware');
+    if (monthlyCount >= limit) {
+      log(`Usage limit exceeded for merchant ${merchantId}: ${monthlyCount}/${limit} (${plan.name} plan)`, 'middleware');
       res.status(402).json({ 
         error: 'Payment Required',
-        message: 'Monthly limit exceeded. Please upgrade your plan.',
+        message: `Monthly limit of ${limit} exceeded. Please upgrade your plan.`,
         usage: {
           current: monthlyCount,
-          limit: MONTHLY_LIMIT
+          limit: limit,
+          plan: plan.name
         }
       });
       return;

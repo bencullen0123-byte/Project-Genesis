@@ -13,6 +13,7 @@ export const merchants = pgTable("merchants", {
   refreshToken: text("refresh_token"),
   oauthState: text("oauth_state"),
   tier: text("tier").default("FREE").notNull(),
+  subscriptionPlanId: text("subscription_plan_id"),
   billingCountry: text("billing_country"),
   billingAddress: text("billing_address"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
