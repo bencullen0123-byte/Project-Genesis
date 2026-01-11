@@ -18,6 +18,26 @@ import {
 } from "@shared/schema";
 import { db, pool } from "./db";
 import { eq, and, sql, desc, lte, asc } from "drizzle-orm";
+import { encrypt, decrypt } from "./lib/encryption";
+
+function decryptMerchant(merchant: Merchant): Merchant {
+  return {
+    ...merchant,
+    accessToken: merchant.accessToken ? decrypt(merchant.accessToken) : merchant.accessToken,
+    refreshToken: merchant.refreshToken ? decrypt(merchant.refreshToken) : merchant.refreshToken,
+  };
+}
+
+function encryptMerchantData(data: Partial<InsertMerchant>): Partial<InsertMerchant> {
+  const encrypted = { ...data };
+  if (encrypted.accessToken) {
+    encrypted.accessToken = encrypt(encrypted.accessToken);
+  }
+  if (encrypted.refreshToken) {
+    encrypted.refreshToken = encrypt(encrypted.refreshToken);
+  }
+  return encrypted;
+}
 
 export interface IStorage {
   // Merchants
@@ -83,34 +103,37 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  // Merchants
+  // Merchants (with field-level encryption for tokens)
   async getMerchant(id: string): Promise<Merchant | undefined> {
     const [merchant] = await db.select().from(merchants).where(eq(merchants.id, id));
-    return merchant;
+    return merchant ? decryptMerchant(merchant) : undefined;
   }
 
   async getMerchantByStripeConnectId(stripeConnectId: string): Promise<Merchant | undefined> {
     const [merchant] = await db.select().from(merchants).where(eq(merchants.stripeConnectId, stripeConnectId));
-    return merchant;
+    return merchant ? decryptMerchant(merchant) : undefined;
   }
 
   async getMerchantByOAuthState(state: string): Promise<Merchant | undefined> {
     const [merchant] = await db.select().from(merchants).where(eq(merchants.oauthState, state));
-    return merchant;
+    return merchant ? decryptMerchant(merchant) : undefined;
   }
 
   async getMerchants(): Promise<Merchant[]> {
-    return db.select().from(merchants).orderBy(desc(merchants.createdAt));
+    const result = await db.select().from(merchants).orderBy(desc(merchants.createdAt));
+    return result.map(decryptMerchant);
   }
 
   async createMerchant(merchant: InsertMerchant): Promise<Merchant> {
-    const [created] = await db.insert(merchants).values(merchant).returning();
-    return created;
+    const encryptedData = encryptMerchantData(merchant);
+    const [created] = await db.insert(merchants).values(encryptedData).returning();
+    return decryptMerchant(created);
   }
 
   async updateMerchant(id: string, data: Partial<InsertMerchant>): Promise<Merchant | undefined> {
-    const [updated] = await db.update(merchants).set(data).where(eq(merchants.id, id)).returning();
-    return updated;
+    const encryptedData = encryptMerchantData(data);
+    const [updated] = await db.update(merchants).set(encryptedData).where(eq(merchants.id, id)).returning();
+    return updated ? decryptMerchant(updated) : undefined;
   }
 
   // Tasks with SELECT FOR UPDATE SKIP LOCKED
