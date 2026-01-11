@@ -7,6 +7,7 @@ import { z } from "zod";
 export const merchants = pgTable("merchants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email"),
+  clerkUserId: text("clerk_user_id").unique(),
   stripeConnectId: text("stripe_connect_id").unique(),
   stripeUserId: text("stripe_user_id"),
   accessToken: text("access_token"),
@@ -20,6 +21,7 @@ export const merchants = pgTable("merchants", {
 }, (table) => [
   index("idx_merchants_stripe_connect").on(table.stripeConnectId),
   index("idx_merchants_oauth_state").on(table.oauthState),
+  index("idx_merchants_clerk_user").on(table.clerkUserId),
 ]);
 
 // 2. SCHEDULED TASKS - The Queue (State Machine)
