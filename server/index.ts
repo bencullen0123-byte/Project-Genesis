@@ -13,6 +13,7 @@ import { runCleanup } from './cron';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { logger } from './lib/logger';
+import { clerkMiddleware, getAuth } from '@clerk/express';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -250,6 +251,10 @@ async function bootstrapWeeklyDigests() {
   );
 
   app.use(express.urlencoded({ extended: false }));
+
+  // Clerk authentication middleware (after webhook routes which need raw body)
+  app.use(clerkMiddleware());
+  log('Clerk authentication middleware enabled', 'auth');
 
   app.use((req, res, next) => {
     const start = Date.now();

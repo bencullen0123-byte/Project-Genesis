@@ -5,41 +5,39 @@ import { insertScheduledTaskSchema, insertMerchantSchema } from "@shared/schema"
 import { z } from "zod";
 import crypto from "crypto";
 import { getStripeClientFactory } from "./stripeClient";
-import { checkUsageLimits } from "./middleware";
+import { checkUsageLimits, requireMerchant } from "./middleware";
 import { log } from "./index";
+import { requireAuth } from '@clerk/express';
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   
-  // Dashboard
-  app.get("/api/dashboard", async (req, res) => {
+  // Dashboard (protected - requires authenticated merchant)
+  app.get("/api/dashboard", requireAuth(), requireMerchant, async (req, res) => {
     try {
+      const merchant = req.merchant!;
       const stats = await storage.getDashboardStats();
       const recentTasks = await storage.getRecentTasks(5);
-      const recentActivity = await storage.getUsageLogs(undefined, undefined, 10);
+      const recentActivity = await storage.getUsageLogs(merchant.id, undefined, 10);
 
-      const merchantId = req.query.merchantId as string | undefined;
-      let usage = { current: 0, limit: 1000 };
-      
-      if (merchantId) {
-        const monthlyCount = await storage.getMonthlyDunningCount(merchantId);
-        usage = { current: monthlyCount, limit: 1000 };
-      } else {
-        const merchants = await storage.getMerchants();
-        if (merchants.length > 0) {
-          const firstMerchant = merchants[0];
-          const monthlyCount = await storage.getMonthlyDunningCount(firstMerchant.id);
-          usage = { current: monthlyCount, limit: 1000 };
-        }
-      }
+      const monthlyCount = await storage.getMonthlyDunningCount(merchant.id);
+      const plan = merchant.subscriptionPlanId || 'price_free';
+      const limit = plan === 'price_pro' ? 10000 : 1000;
+      const usage = { current: monthlyCount, limit };
 
       res.json({
         stats,
         recentTasks,
         recentActivity,
         usage,
+        merchant: {
+          id: merchant.id,
+          email: merchant.email,
+          tier: merchant.tier,
+          stripeConnected: !!merchant.stripeConnectId,
+        },
       });
     } catch (error) {
       console.error("Dashboard error:", error);
@@ -47,8 +45,21 @@ export async function registerRoutes(
     }
   });
 
-  // Tasks
-  app.get("/api/tasks", async (req, res) => {
+  // Current merchant info
+  app.get("/api/merchants/me", requireAuth(), requireMerchant, async (req, res) => {
+    const merchant = req.merchant!;
+    res.json({
+      id: merchant.id,
+      email: merchant.email,
+      tier: merchant.tier,
+      stripeConnected: !!merchant.stripeConnectId,
+      subscriptionPlanId: merchant.subscriptionPlanId,
+      createdAt: merchant.createdAt,
+    });
+  });
+
+  // Tasks (protected)
+  app.get("/api/tasks", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const status = req.query.status as string | undefined;
       const tasks = await storage.getTasks(status);
@@ -276,9 +287,10 @@ export async function registerRoutes(
     }
   });
 
-  // Stripe Connect OAuth - Authorize endpoint
-  app.post("/api/stripe/connect/authorize", async (req, res) => {
+  // Stripe Connect OAuth - Authorize endpoint (protected)
+  app.post("/api/stripe/connect/authorize", requireAuth(), requireMerchant, async (req, res) => {
     try {
+      const merchant = req.merchant!;
       const clientId = process.env.STRIPE_CLIENT_ID;
       
       if (!clientId) {
@@ -290,10 +302,7 @@ export async function registerRoutes(
 
       const state = crypto.randomBytes(32).toString('hex');
 
-      const merchant = await storage.createMerchant({
-        oauthState: state,
-        tier: "FREE",
-      });
+      await storage.updateMerchant(merchant.id, { oauthState: state });
 
       const authorizeUrl = new URL('https://connect.stripe.com/oauth/authorize');
       authorizeUrl.searchParams.set('response_type', 'code');
