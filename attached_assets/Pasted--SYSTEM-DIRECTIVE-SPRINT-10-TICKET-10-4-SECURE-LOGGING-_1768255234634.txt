@@ -1,0 +1,94 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 10 - TICKET 10.4 (SECURE LOGGING)
+CONTEXT: We are currently leaking secrets in our server logs. In server/routes.ts, console.error(error) is used inside catch blocks. If the error object comes from an external API (like Stripe or Clerk), it often contains the Authorization Header (API Key) or sensitive PII in the request config. console.error dumps this raw data to stdout, which gets persisted in our log history forever.
+
+OBJECTIVE: Replace all unsafe console.error calls in the API routes with the secure, redacted log utility.
+
+ACTION PLAN
+Target File: server/routes.ts
+
+Step 1: Ensure Import Exists Verify that the secure logger is imported at the top of the file.
+
+TypeScript
+
+import { log } from "./index"; // Add if missing
+Step 2: Sanitization Sweep (Search & Replace) Replace every instance of console.error with the secure log function.
+
+Change Map:
+
+Dashboard Route:
+
+From: console.error("Dashboard error:", error);
+
+To: log(\Dashboard error: ${error}`, 'routes', 'error');`
+
+Get Tasks Route:
+
+From: console.error("Get tasks error:", error);
+
+To: log(\Get tasks error: ${error}`, 'routes', 'error');`
+
+Get Single Task Route:
+
+From: console.error("Get task error:", error);
+
+To: log(\Get task error: ${error}`, 'routes', 'error');`
+
+Create Task Route:
+
+From: console.error("Create task error:", error);
+
+To: log(\Create task error: ${error}`, 'routes', 'error');`
+
+Retry Task Route:
+
+From: console.error("Retry task error:", error);
+
+To: log(\Retry task error: ${error}`, 'routes', 'error');`
+
+Delete Task Route:
+
+From: console.error("Delete task error:", error);
+
+To: log(\Delete task error: ${error}`, 'routes', 'error');`
+
+Delete Completed Tasks Route:
+
+From: console.error("Delete completed tasks error:", error);
+
+To: log(\Delete completed tasks error: ${error}`, 'routes', 'error');`
+
+Update Merchant Route:
+
+From: console.error("Update merchant error:", error); (If present, or similar)
+
+To: log(\Update merchant error: ${error}`, 'routes', 'error');`
+
+Stripe Connect Authorize:
+
+From: console.error("Stripe connect authorize error:", error);
+
+To: log(\Stripe connect authorize error: ${error}`, 'routes', 'error');`
+
+Stripe Connect Callback:
+
+From: console.error("Stripe connect callback error:", error);
+
+To: log(\Stripe connect callback error: ${error}`, 'routes', 'error');`
+
+Stripe Disconnect:
+
+From: console.error("Stripe disconnect error:", error);
+
+To: log(\Stripe disconnect error: ${error}`, 'routes', 'error');`
+
+Worker Claim/Complete:
+
+From: console.error("Claim task error:", error);
+
+To: log(\Claim task error: ${error}`, 'routes', 'error');`
+
+From: console.error("Complete task error:", error);
+
+To: log(\Complete task error: ${error}`, 'routes', 'error');`
+
+VERIFICATION: Trigger an error (e.g., call an endpoint without auth or with invalid data) and observe the logs. The output must be a simple text message or a structured log object—never a raw dump containing sk_live_....
