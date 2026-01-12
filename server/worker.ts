@@ -10,9 +10,34 @@ const TASK_FOUND_DELAY_MS = 100;
 const REPORT_USAGE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const WEEKLY_DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// Quota guard helper - returns monthly email limit based on plan
+function getPlanLimit(planId: string | null): number {
+  return planId === 'price_pro' ? 10000 : 1000;
+}
+
 async function processTask(task: ScheduledTask): Promise<void> {
   switch (task.taskType) {
     case 'dunning_retry': {
+      // QUOTA GUARD: Check usage limit before processing
+      const merchant = await storage.getMerchant(task.merchantId);
+      if (!merchant) {
+        throw new Error(`Merchant ${task.merchantId} not found`);
+      }
+
+      const currentUsage = await storage.getMonthlyDunningCount(task.merchantId);
+      const limit = getPlanLimit(merchant.subscriptionPlanId);
+
+      if (currentUsage >= limit) {
+        log(`Quota exceeded for merchant ${task.merchantId} (${currentUsage}/${limit}). Dropping task ${task.id}.`, 'worker', 'warn');
+        await storage.updateTaskStatus(task.id, 'failed');
+        await storage.createUsageLog({
+          merchantId: task.merchantId,
+          metricType: 'quota_exceeded',
+          amount: 1,
+        });
+        return; // STOP EXECUTION - don't send email
+      }
+
       const factory = await getStripeClientFactory();
       const stripe = await factory.getClient(task.merchantId);
       
