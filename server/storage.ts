@@ -53,7 +53,7 @@ export interface IStorage {
   // Tasks - with SELECT FOR UPDATE SKIP LOCKED for concurrency
   getTask(id: number): Promise<ScheduledTask | undefined>;
   getTasks(merchantId: string, status?: string): Promise<ScheduledTask[]>;
-  getRecentTasks(limit?: number): Promise<ScheduledTask[]>;
+  getRecentTasks(merchantId: string, limit?: number): Promise<ScheduledTask[]>;
   createTask(task: InsertScheduledTask): Promise<ScheduledTask>;
   updateTaskStatus(id: number, status: string): Promise<ScheduledTask | undefined>;
   claimNextTask(): Promise<ScheduledTask | undefined>;
@@ -94,7 +94,7 @@ export interface IStorage {
   hasWeeklyDigestTask(merchantId: string): Promise<boolean>;
 
   // Dashboard Stats
-  getDashboardStats(): Promise<{
+  getDashboardStats(merchantId: string): Promise<{
     totalRecovered: number;
     activeMerchants: number;
     pendingTasks: number;
@@ -170,8 +170,9 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(scheduledTasks.createdAt));
   }
 
-  async getRecentTasks(limit: number = 10): Promise<ScheduledTask[]> {
+  async getRecentTasks(merchantId: string, limit: number = 10): Promise<ScheduledTask[]> {
     return db.select().from(scheduledTasks)
+      .where(eq(scheduledTasks.merchantId, merchantId))
       .orderBy(desc(scheduledTasks.createdAt))
       .limit(limit);
   }
@@ -480,51 +481,63 @@ export class DatabaseStorage implements IStorage {
     return !!existing;
   }
 
-  // Dashboard Stats
-  async getDashboardStats() {
-    const [merchantCount] = await db.select({ count: sql<number>`count(*)::int` }).from(merchants);
-    
+  // Dashboard Stats (Tenant-Scoped)
+  async getDashboardStats(merchantId: string) {
     const [pendingCount] = await db.select({ count: sql<number>`count(*)::int` })
       .from(scheduledTasks)
-      .where(eq(scheduledTasks.status, TaskStatus.PENDING));
+      .where(and(
+        eq(scheduledTasks.status, TaskStatus.PENDING),
+        eq(scheduledTasks.merchantId, merchantId)
+      ));
     
     const [runningCount] = await db.select({ count: sql<number>`count(*)::int` })
       .from(scheduledTasks)
-      .where(eq(scheduledTasks.status, TaskStatus.RUNNING));
+      .where(and(
+        eq(scheduledTasks.status, TaskStatus.RUNNING),
+        eq(scheduledTasks.merchantId, merchantId)
+      ));
 
     const [totalRecovered] = await db.select({ 
       total: sql<number>`COALESCE(sum(recovered_cents), 0)::int` 
-    }).from(dailyMetrics);
+    }).from(dailyMetrics)
+      .where(eq(dailyMetrics.merchantId, merchantId));
 
-    // Get success rate from last 7 days
+    // Get success rate from last 7 days (scoped to merchant)
     const [successStats] = await db.select({
       success: sql<number>`count(*) filter (where metric_type = 'recovery_success')::int`,
       failed: sql<number>`count(*) filter (where metric_type = 'recovery_failed')::int`,
     }).from(usageLogs)
-      .where(sql`created_at > NOW() - INTERVAL '7 days'`);
+      .where(and(
+        eq(usageLogs.merchantId, merchantId),
+        sql`created_at > NOW() - INTERVAL '7 days'`
+      ));
 
     const totalAttempts = (successStats?.success || 0) + (successStats?.failed || 0);
     const successRate = totalAttempts > 0 
       ? Math.round((successStats.success / totalAttempts) * 100) 
       : 100;
 
-    // Processing rate (tasks per minute in last hour)
+    // Processing rate (tasks per minute in last hour, scoped to merchant)
     const [rateStats] = await db.select({
       count: sql<number>`count(*)::int`,
     }).from(usageLogs)
-      .where(sql`created_at > NOW() - INTERVAL '1 hour'`);
+      .where(and(
+        eq(usageLogs.merchantId, merchantId),
+        sql`created_at > NOW() - INTERVAL '1 hour'`
+      ));
 
     const processingRate = Math.round((rateStats?.count || 0) / 60);
 
-    // Last processed
+    // Last processed (scoped to merchant)
     const [lastLog] = await db.select()
       .from(usageLogs)
+      .where(eq(usageLogs.merchantId, merchantId))
       .orderBy(desc(usageLogs.createdAt))
       .limit(1);
 
     return {
       totalRecovered: totalRecovered?.total || 0,
-      activeMerchants: merchantCount?.count || 0,
+      activeMerchants: 1, // You are the only merchant in your view
       pendingTasks: pendingCount?.count || 0,
       runningTasks: runningCount?.count || 0,
       successRate,
@@ -532,7 +545,7 @@ export class DatabaseStorage implements IStorage {
       lastProcessedAt: lastLog?.createdAt?.toISOString() || null,
       trends: {
         recovered: 12, // Placeholder for trend calculation
-        merchants: 5,
+        merchants: 0,
         tasks: -3,
       },
     };

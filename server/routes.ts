@@ -18,8 +18,8 @@ export async function registerRoutes(
   app.get("/api/dashboard", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const merchant = req.merchant!;
-      const stats = await storage.getDashboardStats();
-      const recentTasks = await storage.getRecentTasks(5);
+      const stats = await storage.getDashboardStats(merchant.id);
+      const recentTasks = await storage.getRecentTasks(merchant.id, 5);
       const recentActivity = await storage.getUsageLogs(merchant.id, undefined, 10);
 
       const monthlyCount = await storage.getMonthlyDunningCount(merchant.id);
@@ -502,15 +502,15 @@ export async function registerRoutes(
     }
   });
 
-  // Health check
+  // Health check (unauthenticated - uses a basic DB query instead of scoped stats)
   app.get("/api/health", async (req, res) => {
     try {
-      const stats = await storage.getDashboardStats();
+      // Simple health check - just verify DB is reachable
+      const merchants = await storage.getMerchants();
       res.json({
         status: "healthy",
         database: "connected",
-        pendingTasks: stats.pendingTasks,
-        runningTasks: stats.runningTasks,
+        merchantsCount: merchants.length,
       });
     } catch (error) {
       res.status(500).json({ status: "unhealthy", error: "Database connection failed" });
