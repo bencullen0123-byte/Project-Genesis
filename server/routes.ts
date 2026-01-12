@@ -384,17 +384,14 @@ export async function registerRoutes(
     }
   );
 
-  // Stripe Connect - Disconnect (Kill Switch)
-  app.post("/api/stripe/disconnect", async (req, res) => {
+  // SECURED: Stripe Connect - Disconnect (Kill Switch)
+  // Uses requireAuth() + requireMerchant middleware - ignores request body
+  app.post("/api/stripe/disconnect", requireAuth(), requireMerchant, async (req, res) => {
     try {
-      const { merchantId } = req.body;
-      
-      if (!merchantId) {
-        return res.status(400).json({ message: "merchantId is required" });
-      }
+      // SECURITY FIX: Do not read merchantId from body. Use the session.
+      const merchantId = req.merchant!.id;
 
       const merchant = await storage.getMerchant(merchantId);
-      
       if (!merchant) {
         return res.status(404).json({ message: "Merchant not found" });
       }
@@ -406,7 +403,7 @@ export async function registerRoutes(
       const factory = await getStripeClientFactory();
       const platformClient = factory.getPlatformClient();
 
-      // Step 1: Cancel all active subscriptions for this connected account
+      // Step 1: Cancel all active subscriptions for this connected account (Best Effort)
       try {
         const tenantClient = await factory.getClient(merchantId);
         const subscriptions = await tenantClient.subscriptions.list({
@@ -418,13 +415,12 @@ export async function registerRoutes(
           await tenantClient.subscriptions.cancel(sub.id, undefined, {
             idempotencyKey: `cancel_sub_${merchantId}_${sub.id}`,
           });
-          log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`, 'routes');
         }
       } catch (subError: any) {
-        log(`Failed to cancel subscriptions for merchant ${merchantId}: ${subError.message}`, 'routes', 'warn');
+        log(`Failed to cancel subscriptions during disconnect: ${subError.message}`, 'stripe', 'warn');
       }
 
-      // Step 2: Deauthorize OAuth connection (optional but recommended)
+      // Step 2: Deauthorize OAuth connection (Revoke Access)
       try {
         const clientId = process.env.STRIPE_CLIENT_ID;
         if (clientId && merchant.stripeUserId) {
@@ -434,13 +430,12 @@ export async function registerRoutes(
           }, {
             idempotencyKey: `deauth_${merchantId}_${merchant.stripeUserId}`,
           });
-          log(`Deauthorized Stripe account ${merchant.stripeUserId}`, 'routes');
         }
       } catch (deauthError: any) {
-        log(`Failed to deauthorize merchant ${merchantId}: ${deauthError.message}`, 'routes', 'warn');
+        log(`Failed to deauthorize Stripe account: ${deauthError.message}`, 'stripe', 'warn');
       }
 
-      // Step 3: Clear Stripe credentials from database
+      // Step 3: Wipe Credentials from DB
       await storage.updateMerchant(merchantId, {
         stripeConnectId: null,
         stripeUserId: null,
@@ -448,22 +443,20 @@ export async function registerRoutes(
         refreshToken: null,
       });
 
-      // Step 4: Delete pending/running tasks
-      const deletedTasks = await storage.deletePendingTasks(merchantId);
-      log(`Deleted ${deletedTasks} pending tasks for merchant ${merchantId}`, 'routes');
+      // Step 4: Kill Zombie Tasks (Cleanup) - ticket 11.3 ensures this kills running tasks too
+      await storage.deletePendingTasks(merchantId);
 
-      // Log the disconnection
       await storage.createUsageLog({
         merchantId,
         metricType: 'merchant_disconnected',
         amount: 1,
       });
 
-      log(`Merchant ${merchantId} disconnected successfully`, 'routes');
-      
-      res.json({ success: true, deletedTasks });
+      log(`Merchant ${merchantId} disconnected from Stripe`, 'stripe');
+      res.json({ success: true });
+
     } catch (error: any) {
-      log(`Stripe disconnect error: ${error.message || error}`, 'routes', 'error');
+      log(`Stripe disconnect error: ${error}`, 'routes', 'error');
       res.status(500).json({ message: "Failed to disconnect from Stripe" });
     }
   });
