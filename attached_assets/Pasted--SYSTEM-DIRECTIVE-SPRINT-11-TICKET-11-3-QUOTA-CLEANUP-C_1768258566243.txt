@@ -1,0 +1,85 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 11 - TICKET 11.3 (QUOTA & CLEANUP)
+CONTEXT: We have two "Reliability" exploits remaining:
+
+Quota Bypass: The worker processes dunning_retry tasks without checking the merchant's email limit. A user can flood us with webhooks and send 50k emails for free.
+
+Zombie Tasks: When a user disconnects Stripe, we only delete pending tasks. If a worker is currently processing a task (running), it continues, leading to errors or "Zombie" emails sent after disconnect.
+
+OBJECTIVE:
+
+Inject a "Quota Guard" inside the Worker loop (processTask).
+
+Update the Disconnect logic (deletePendingTasks) to kill running tasks as well.
+
+ACTION PLAN
+Task 1: The Quota Guard (server/worker.ts)
+
+Target: server/worker.ts
+
+Action: Inside the processTask function, specifically for dunning_retry tasks, check the usage vs. limit before attempting to send the email.
+
+TypeScript
+
+// server/worker.ts
+
+// 1. Add Helper (Top of file)
+function getPlanLimit(planId: string | null): number {
+  return planId === 'price_pro' ? 10000 : 1000;
+}
+
+// 2. Modify processTask (Inside the function)
+async function processTask(task: ScheduledTask) {
+  // ... existing code ...
+  
+  if (task.type === 'dunning_retry') {
+    const merchant = await storage.getMerchant(task.merchantId);
+    if (!merchant) {
+       // Allow worker to fail gracefully if merchant is gone
+       throw new Error(`Merchant ${task.merchantId} not found`);
+    }
+
+    // --- THE QUOTA GUARD ---
+    const currentUsage = await storage.getMonthlyDunningCount(task.merchantId);
+    const limit = getPlanLimit(merchant.subscriptionPlanId);
+
+    if (currentUsage >= limit) {
+      log(`Quota exceeded for merchant ${task.merchantId} (${currentUsage}/${limit}). Dropping task ${task.id}.`, 'worker', 'warn');
+      
+      // Fail the task to stop retry loop
+      await storage.updateTaskStatus(task.id, 'failed');
+      
+      // Create a usage log indicating drop (optional, but good for audit)
+      // await storage.createUsageLog({ ... metricType: 'quota_exceeded' ... });
+      
+      return; // STOP EXECUTION
+    }
+    // -----------------------
+  }
+
+  // ... existing email sending logic ...
+}
+Task 2: The Zombie Cleanup (server/storage.ts)
+
+Target: server/storage.ts
+
+Action: Update deletePendingTasks to remove running tasks too.
+
+TypeScript
+
+// server/storage.ts
+
+  async deletePendingTasks(merchantId: string): Promise<number> {
+    const result = await db.delete(scheduledTasks)
+      .where(and(
+        eq(scheduledTasks.merchantId, merchantId),
+        // CRITICAL FIX: Kill 'running' tasks to prevent zombie execution
+        inArray(scheduledTasks.status, ['pending', 'running']) 
+      ))
+      .returning();
+    return result.length;
+  }
+VERIFICATION:
+
+Quota: Set a merchant's usage to 1000. Trigger a task. Verify log shows "Quota exceeded" and email is NOT sent.
+
+Zombie: Manually set a task to running. Call Disconnect. Verify task is deleted.
