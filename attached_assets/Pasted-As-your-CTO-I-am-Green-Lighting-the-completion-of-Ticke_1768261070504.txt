@@ -1,0 +1,68 @@
+As your CTO, I am Green Lighting the completion of Ticket 12.2.
+
+You have successfully bridged the gap between Stripe's billing engine and our database. By adding the stripeCustomerId schema and the lookup logic, we can now actually monetize the platform.
+
+Ticket 12.2 is CLOSED.
+
+We now initiate the final reliability fix before launch.
+
+🚨 SYSTEM DIRECTIVE: SPRINT 12 - TICKET 12.3 (WORKER RELIABILITY)
+CONTEXT: Our usage reporting worker contains a "Poison Pill" vulnerability. It fetches pending logs and attempts to report them to Stripe. If a specific log entry causes a non-retryable error (e.g., "Customer does not exist" or "Subscription missing"), the worker catches the error but leaves the log in the queue. On the next tick, it fetches the exact same failed log, fails again, and enters an infinite loop. This stops all usage reporting for every other customer.
+
+OBJECTIVE: Implement "Poison Pill" handling in the worker. If a usage report fails with a permanent error (4xx), mark it as 'processed' (skipped) so the worker can move on.
+
+ACTION PLAN
+Target File: server/worker.ts
+
+Step 1: Locate processReportUsage Find the main loop where stripe.subscriptionItems.createUsageRecord is called.
+
+Step 2: Upgrade Error Handling Replace the catch block with logic that distinguishes between Transient (retry) and Permanent (skip) errors.
+
+TypeScript
+
+// server/worker.ts
+
+// ... inside processReportUsage loop ...
+
+    try {
+      await stripe.subscriptionItems.createUsageRecord(
+        logEntry.subscriptionItemId,
+        {
+          quantity: logEntry.amount,
+          timestamp: Math.floor(new Date().getTime() / 1000),
+          action: 'increment',
+        },
+        { idempotencyKey: `usage_${logEntry.id}` }
+      );
+
+      // Success: Mark for status update
+      reportedIds.push(logEntry.id);
+
+    } catch (error: any) {
+      // --- THE FIX: POISON PILL HANDLING ---
+      
+      // Detect permanent errors (4xx Client Errors)
+      // These will NEVER succeed on retry, so we must consume the message to unblock the queue.
+      const isPermanent = 
+        error.type === 'StripeInvalidRequestError' || 
+        error.statusCode === 400 || 
+        error.statusCode === 404 ||
+        (error.code && error.code.startsWith('resource_'));
+
+      if (isPermanent) {
+        log(`Poison Pill encountered. Usage Log ${logEntry.id} failed permanently: ${error.message}. Skipping.`, 'worker', 'error');
+        
+        // CRITICAL: Add to reportedIds so it gets marked as 'completed' (or you could add a 'failed' status)
+        // This removes it from the pending queue.
+        reportedIds.push(logEntry.id); 
+      } else {
+        // Transient error (Network, 500, Rate Limit)
+        // Log warning but DO NOT push to reportedIds. It will be retried next tick.
+        log(`Transient usage reporting error for log ${logEntry.id}: ${error.message}`, 'worker', 'warn');
+      }
+    }
+VERIFICATION:
+
+Code Review: Ensure reportedIds.push(logEntry.id) happens inside the if (isPermanent) block.
+
+Logic Check: If Stripe says "Subscription not found" (404), the code must acknowledge the log entry so the worker doesn't pick it up again 10 seconds later
