@@ -189,7 +189,21 @@ async function processReportUsage(task: ScheduledTask): Promise<void> {
               reportedIds.push(logEntry.id);
               log(`Usage log ${logEntry.id} already reported (idempotent)`, 'worker');
             } else {
-              log(`Failed to report usage log ${logEntry.id}: ${stripeError.message}`, 'worker');
+              // POISON PILL HANDLING: Detect permanent vs transient errors
+              // Permanent errors (4xx) will never succeed on retry - skip them to unblock the queue
+              const isPermanent = 
+                stripeError.type === 'StripeInvalidRequestError' || 
+                stripeError.statusCode === 400 || 
+                stripeError.statusCode === 404 ||
+                (stripeError.code && stripeError.code.startsWith('resource_'));
+
+              if (isPermanent) {
+                log(`Poison Pill: Usage log ${logEntry.id} failed permanently: ${stripeError.message}. Skipping.`, 'worker', 'error');
+                reportedIds.push(logEntry.id); // Remove from queue
+              } else {
+                // Transient error (Network, 500, Rate Limit) - will be retried next tick
+                log(`Transient usage reporting error for log ${logEntry.id}: ${stripeError.message}`, 'worker', 'warn');
+              }
             }
           }
         }
