@@ -9,6 +9,7 @@ export const merchants = pgTable("merchants", {
   email: text("email"),
   clerkUserId: text("clerk_user_id").unique(),
   stripeConnectId: text("stripe_connect_id").unique(),
+  stripeCustomerId: text("stripe_customer_id").unique(),
   stripeUserId: text("stripe_user_id"),
   accessToken: text("access_token"),
   refreshToken: text("refresh_token"),
@@ -20,6 +21,7 @@ export const merchants = pgTable("merchants", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_merchants_stripe_connect").on(table.stripeConnectId),
+  index("idx_merchants_stripe_customer").on(table.stripeCustomerId),
   index("idx_merchants_oauth_state").on(table.oauthState),
   index("idx_merchants_clerk_user").on(table.clerkUserId),
 ]);

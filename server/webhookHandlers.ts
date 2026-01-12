@@ -297,6 +297,7 @@ async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookRe
   const subscription = event.data.object as Stripe.Subscription;
   const stripeCustomerId = subscription.customer as string;
   const priceId = subscription.items.data[0]?.price.id;
+  const status = subscription.status;
 
   if (!priceId) {
     return { 
@@ -306,12 +307,36 @@ async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookRe
     };
   }
 
-  // Platform billing event received - exploit blocked.
-  // Note: Full implementation requires stripeCustomerId lookup in merchants table.
-  // For now, this acts as a pure shield blocking the privilege escalation exploit.
-  return { 
-    processed: true, 
-    action: 'ignored', 
-    reason: 'SaaS Billing Event received (Exploit Blocked). Pending: Schema update for stripeCustomerId lookup.' 
-  };
+  try {
+    // Find merchant by Platform Customer ID
+    const merchant = await storage.getMerchantByStripeCustomerId(stripeCustomerId);
+
+    if (!merchant) {
+      return { 
+        processed: true, 
+        action: 'error', 
+        reason: `Merchant not found for Customer ID: ${stripeCustomerId}` 
+      };
+    }
+
+    // If active/trialing -> Set Plan ID. Otherwise -> Free.
+    const newPlanId = (status === 'active' || status === 'trialing') ? priceId : 'price_free';
+
+    await storage.updateMerchant(merchant.id, {
+      subscriptionPlanId: newPlanId
+    });
+
+    return { 
+      processed: true, 
+      action: 'processed', 
+      reason: `Plan updated to ${newPlanId} for merchant ${merchant.id}` 
+    };
+
+  } catch (err: any) {
+    return { 
+      processed: false, 
+      action: 'error', 
+      reason: `Failed to sync plan: ${err.message}` 
+    };
+  }
 }
