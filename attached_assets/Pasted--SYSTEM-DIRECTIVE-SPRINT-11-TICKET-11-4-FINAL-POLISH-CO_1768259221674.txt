@@ -1,0 +1,81 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 11 - TICKET 11.4 (FINAL POLISH)
+CONTEXT: We have reached the last mile. Two minor but critical issues remain:
+
+GDPR Compliance (Data Residue): The "Right to Erasure" (Admin Delete) endpoint removes the user and their tasks but orphans the daily_metrics table. We are retaining financial data after a deletion request, which violates GDPR.
+
+Log Hygiene (Secret Interpolation): In server/routes.ts, the Stripe OAuth callback logs the connection success using string interpolation. While not an explicit leak yet, it defeats our redaction system (which looks for object keys) if we ever added sensitive fields to that log line.
+
+OBJECTIVE:
+
+Implement deleteDailyMetrics in the storage layer.
+
+Wire it into the Admin Delete route.
+
+Refactor the Stripe Connection log to use a structured JSON object.
+
+ACTION PLAN
+Task 1: The Data Sweep (server/storage.ts)
+
+Goal: Add a method to delete metrics for a specific merchant.
+
+Action: Update the Interface and Class.
+
+TypeScript
+
+// server/storage.ts
+
+  // 1. Add to IStorage Interface
+  deleteDailyMetrics(merchantId: string): Promise<number>;
+
+  // 2. Add to DatabaseStorage Class
+  async deleteDailyMetrics(merchantId: string): Promise<number> {
+    const result = await db.delete(dailyMetrics)
+      .where(eq(dailyMetrics.merchantId, merchantId))
+      .returning();
+    return result.length;
+  }
+Task 2: The Wiring (server/routes.ts)
+
+Goal: Ensure Admin Delete wipes everything and fix the logging style.
+
+Action 1 (Fix GDPR): Update DELETE /api/admin/merchants/:id
+
+TypeScript
+
+// server/routes.ts (Inside DELETE /api/admin/merchants/:id)
+
+    // ... inside the try block ...
+    
+    // 1. Delete Tasks (Already done)
+    const deletedTasks = await storage.deleteAllTasksForMerchant(merchantId);
+    
+    // 2. Delete Logs (Already done)
+    const deletedLogs = await storage.deleteUsageLogs(merchantId);
+    
+    // 3. [NEW] Delete Metrics (The Fix)
+    await storage.deleteDailyMetrics(merchantId);
+    
+    // 4. Delete Merchant (Already done)
+    await storage.deleteMerchant(merchantId);
+    
+    // ...
+Action 2 (Fix Logging): Update GET /api/stripe/connect/callback
+
+TypeScript
+
+// server/routes.ts (Inside Stripe Callback)
+
+      // Find this line:
+      // log(`Merchant ${merchant.id} securely connected Stripe account ${response.stripe_user_id}`, 'auth');
+
+      // Replace with:
+      log(JSON.stringify({
+        msg: 'Merchant connected', 
+        merchantId: merchant.id, 
+        stripeUserId: response.stripe_user_id 
+      }), 'auth');
+VERIFICATION:
+
+Code Check: Ensure daily_metrics is included in the delete flow.
+
+Log Check: Ensure no variables are injected directly into log strings in the auth flow.
