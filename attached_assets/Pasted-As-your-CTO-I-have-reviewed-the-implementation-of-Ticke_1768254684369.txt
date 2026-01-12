@@ -1,0 +1,69 @@
+As your CTO, I have reviewed the implementation of Ticket 10.1.
+
+Status: 🟢 APPROVED. The logic is sound. We now listen to the "Source of Truth" (Stripe Webhooks) to manage access levels. This closes the gap between "Payment Received" and "Service Delivered."
+
+Now, we move immediately to Ticket 10.2 to stop the bleeding on the cost side.
+
+🚨 SYSTEM DIRECTIVE: SPRINT 10 - TICKET 10.2 (COST CONTROL)
+CONTEXT: We have a "Free Lunch" vulnerability. While creating new tasks is quota-capped, retrying existing tasks is not. A user on the Free Plan (limit: 100) can create 100 tasks, wait for them to finish, and then hit /retry on them 10,000 times. This bypasses our monetization model and incurs unbounded SMTP/Worker costs.
+
+OBJECTIVE: Enforce the checkUsageLimits middleware on the Task Retry endpoint.
+
+ACTION PLAN
+Target File: server/routes.ts
+
+Step 1: Locate the Vulnerable Endpoint Find the POST route for /api/tasks/:id/retry. It currently looks like this:
+
+TypeScript
+
+app.post("/api/tasks/:id/retry", requireAuth(), requireMerchant, async (req, res) => { ...
+Step 2: Inject the Guard Add checkUsageLimits to the middleware chain. It must come after requireMerchant (so we know who to check) and before the handler (so we stop them before writing to the DB).
+
+Code Block to Apply:
+
+TypeScript
+
+  // SECURE: Retry Task (Now with Quota Enforcement)
+  app.post(
+    "/api/tasks/:id/retry",
+    requireAuth(),
+    requireMerchant,
+    checkUsageLimits, // <--- THE FIX: Stops quota abuse
+    async (req, res) => {
+      try {
+        const id = parseInt(req.params.id);
+        const task = await storage.getTask(id);
+        
+        if (!task) return res.status(404).json({ error: "Task not found" });
+        
+        // SECURITY CHECK
+        if (task.merchantId !== req.merchant!.id) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        
+        const updated = await storage.updateTaskStatus(id, "pending");
+        
+        // Log usage (This counts against the quota we just checked)
+        await storage.createUsageLog({
+          merchantId: task.merchantId,
+          metricType: "task_retry",
+          amount: 1,
+        });
+        
+        res.json(updated);
+      } catch (error) {
+        // Use secure logger if available, otherwise keep existing error handling for now
+        console.error("Retry task error:", error);
+        res.status(500).json({ error: "Failed to retry task" });
+      }
+    }
+  );
+VERIFICATION:
+
+Log in as a user with 0 quota remaining.
+
+Attempt to retry a task.
+
+Expect: 403 Forbidden (or 402 Payment Required, depending on middleware logic).
+
+The server log should show "Usage limit reached."
