@@ -169,9 +169,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/tasks/completed", async (req, res) => {
+  app.delete("/api/tasks/completed", requireAuth(), requireMerchant, async (req, res) => {
     try {
-      const count = await storage.deleteCompletedTasks();
+      const count = await storage.deleteCompletedTasks(req.merchant!.id);
       res.json({ deleted: count });
     } catch (error) {
       log(`Delete completed tasks error: ${error}`, 'routes', 'error');
@@ -222,8 +222,23 @@ export async function registerRoutes(
     }
   });
 
+  // Worker authentication middleware
+  const requireWorkerAuth = (req: any, res: any, next: any) => {
+    const secret = process.env.WORKER_SECRET;
+    if (!secret) {
+      log("Worker secret not configured", "security", "error");
+      return res.status(500).json({ error: "Server configuration error" });
+    }
+    
+    if (req.headers['x-worker-secret'] !== secret) {
+      log(`Unauthorized worker access attempt from ${req.ip}`, "security", "warn");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  };
+
   // Worker endpoint - claims next task for processing
-  app.post("/api/worker/claim", async (req, res) => {
+  app.post("/api/worker/claim", requireWorkerAuth, async (req, res) => {
     try {
       const task = await storage.claimNextTask();
       if (!task) {
@@ -237,7 +252,7 @@ export async function registerRoutes(
   });
 
   // Worker endpoint - complete task
-  app.post("/api/worker/complete/:id", async (req, res) => {
+  app.post("/api/worker/complete/:id", requireWorkerAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const { success, recoveredCents } = req.body;

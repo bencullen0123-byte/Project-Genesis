@@ -58,7 +58,7 @@ export interface IStorage {
   updateTaskStatus(id: number, status: string): Promise<ScheduledTask | undefined>;
   claimNextTask(): Promise<ScheduledTask | undefined>;
   deleteTask(id: number): Promise<boolean>;
-  deleteCompletedTasks(): Promise<number>;
+  deleteCompletedTasks(merchantId: string): Promise<number>;
   deletePendingTasks(merchantId: string): Promise<number>;
   deleteAllTasksForMerchant(merchantId: string): Promise<number>;
 
@@ -242,9 +242,12 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async deleteCompletedTasks(): Promise<number> {
+  async deleteCompletedTasks(merchantId: string): Promise<number> {
     const result = await db.delete(scheduledTasks)
-      .where(eq(scheduledTasks.status, TaskStatus.COMPLETED))
+      .where(and(
+        eq(scheduledTasks.status, TaskStatus.COMPLETED),
+        eq(scheduledTasks.merchantId, merchantId)
+      ))
       .returning();
     return result.length;
   }
