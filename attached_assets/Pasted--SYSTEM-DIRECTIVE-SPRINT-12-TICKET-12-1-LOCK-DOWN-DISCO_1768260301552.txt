@@ -1,0 +1,93 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 12 - TICKET 12.1 (LOCK DOWN DISCONNECT)
+CONTEXT: We have a critical "Account Takeover" vulnerability. The endpoint POST /api/stripe/disconnect currently accepts merchantId from the request body without checking if the user is authenticated. Any attacker can send { "merchantId": 1 } to this endpoint and disconnect that merchant from Stripe, effectively killing their business.
+
+OBJECTIVE: Secure the Disconnect endpoint immediately. It must ignore the request body and only use the ID from the authenticated session.
+
+ACTION PLAN
+Target File: server/routes.ts
+
+Step 1: Locate the Vulnerable Route Search for: app.post("/api/stripe/disconnect", async (req, res) => {
+
+Step 2: Secure It Replace the entire route handler with this secure implementation:
+
+TypeScript
+
+// SECURED: Stripe Disconnect
+// 1. Add Middleware: requireAuth() and requireMerchant
+// 2. Remove Payload Trust: Use req.merchant.id, NOT req.body
+app.post("/api/stripe/disconnect", requireAuth(), requireMerchant, async (req, res) => {
+  try {
+    // SECURITY FIX: Do not read merchantId from body. Use the session.
+    const merchantId = req.merchant!.id; 
+    
+    const merchant = await storage.getMerchant(merchantId);
+    if (!merchant) return res.status(404).json({ message: "Merchant not found" });
+    
+    if (!merchant.stripeConnectId) {
+      return res.status(400).json({ message: "Merchant is not connected to Stripe" });
+    }
+
+    const factory = await getStripeClientFactory();
+    const platformClient = factory.getPlatformClient();
+
+    // 1. Cancel Active Subscriptions (Best Effort)
+    try {
+      const tenantClient = await factory.getClient(merchantId);
+      const subscriptions = await tenantClient.subscriptions.list({ status: 'active', limit: 100 });
+      
+      for (const sub of subscriptions.data) {
+        await tenantClient.subscriptions.cancel(sub.id, undefined, { 
+          idempotencyKey: `cancel_sub_${merchantId}_${sub.id}` 
+        });
+      }
+    } catch (subError: any) {
+      log(`Failed to cancel subscriptions during disconnect: ${subError.message}`, 'stripe', 'warn');
+    }
+
+    // 2. Deauthorize via Stripe OAuth (Revoke Access)
+    try {
+      const clientId = process.env.STRIPE_CLIENT_ID;
+      if (clientId && merchant.stripeUserId) {
+        await platformClient.oauth.deauthorize({ 
+          client_id: clientId, 
+          stripe_user_id: merchant.stripeUserId 
+        }, { 
+          idempotencyKey: `deauth_${merchantId}_${merchant.stripeUserId}` 
+        });
+      }
+    } catch (deauthError: any) {
+      log(`Failed to deauthorize Stripe account: ${deauthError.message}`, 'stripe', 'warn');
+    }
+
+    // 3. Wipe Credentials from DB
+    await storage.updateMerchant(merchantId, { 
+      stripeConnectId: null, 
+      stripeUserId: null, 
+      accessToken: null, 
+      refreshToken: null 
+    });
+
+    // 4. Kill Zombie Tasks (Cleanup)
+    await storage.deletePendingTasks(merchantId); // Note: ticket 11.3 ensures this kills running tasks too
+    
+    await storage.createUsageLog({ 
+      merchantId, 
+      metricType: 'merchant_disconnected', 
+      amount: 1 
+    });
+
+    log(`Merchant ${merchantId} disconnected from Stripe`, 'stripe');
+    res.json({ success: true });
+
+  } catch (error: any) {
+    log(`Stripe disconnect error: ${error}`, 'routes', 'error');
+    res.status(500).json({ message: "Failed to disconnect from Stripe" });
+  }
+});
+VERIFICATION:
+
+Test Attack: Try curl -X POST http://localhost:5000/api/stripe/disconnect -H "Content-Type: application/json" -d '{"merchantId": "1"}' (No Auth).
+
+Expect: 401 Unauthorized (or 403). The code inside must NOT execute.
+
+Test Legit: Log in via the Frontend, click Disconnect. It should work for your account only.
