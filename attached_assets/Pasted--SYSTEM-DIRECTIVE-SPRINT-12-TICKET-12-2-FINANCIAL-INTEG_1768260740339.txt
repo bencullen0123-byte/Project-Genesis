@@ -1,0 +1,102 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 12 - TICKET 12.2 (FINANCIAL INTEGRITY)
+CONTEXT: Our "Pro Plan" upgrade path is currently dead. When a user buys a subscription on our Platform, Stripe sends a webhook with a customer ID (e.g., cus_123). Currently, our merchants table does not store this Platform Customer ID (we only have stripeConnectId, which is for their payouts). Because we can't map cus_123 to a merchant, we cannot upgrade them.
+
+OBJECTIVE:
+
+Update the Schema to store stripeCustomerId.
+
+Update the Webhook Handler to use this ID for plan upgrades.
+
+ACTION PLAN
+Task 1: Update Schema (shared/schema.ts)
+
+Action: Add the stripeCustomerId column to the merchants table.
+
+TypeScript
+
+// shared/schema.ts
+
+export const merchants = pgTable("merchants", {
+  // ... existing fields ...
+  stripeConnectId: text("stripe_connect_id"), 
+  
+  // ADD THIS:
+  stripeCustomerId: text("stripe_customer_id").unique(), 
+  
+  // ... existing fields ...
+});
+Task 2: Update Webhook Logic (server/webhookHandlers.ts)
+
+Action: Rewrite handleSubscriptionUpdated to perform the correct lookup and update.
+
+TypeScript
+
+// server/webhookHandlers.ts
+
+// [REPLACE the existing handleSubscriptionUpdated function]
+async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookResult> {
+  // 1. TRUST BOUNDARY (Safety Check)
+  // If event.account is present, it's a tenant event. Ignore it for billing.
+  if (event.account) {
+    return { 
+      processed: true, 
+      action: 'ignored', 
+      reason: 'Security Guard: Ignoring tenant-side subscription event' 
+    };
+  }
+
+  const subscription = event.data.object as Stripe.Subscription;
+  const stripeCustomerId = subscription.customer as string;
+  
+  // 2. Identify the Plan
+  const priceId = subscription.items.data[0]?.price.id;
+  const status = subscription.status;
+
+  if (!priceId) {
+    return { processed: true, action: 'ignored', reason: 'No price ID found' };
+  }
+
+  try {
+    // 3. FIND MERCHANT (The Fix)
+    // We look up by the Platform Customer ID we added to the schema
+    const [merchant] = await db
+      .select()
+      .from(merchants)
+      .where(eq(merchants.stripeCustomerId, stripeCustomerId))
+      .limit(1);
+
+    if (!merchant) {
+      return { 
+        processed: true, 
+        action: 'error', 
+        reason: `Merchant not found for Customer ID: ${stripeCustomerId}` 
+      };
+    }
+
+    // 4. UPDATE PLAN
+    // If active/trialing -> Set Plan ID. Otherwise -> Free.
+    const newPlanId = (status === 'active' || status === 'trialing') ? priceId : 'price_free';
+
+    await storage.updateMerchant(merchant.id, {
+      subscriptionPlanId: newPlanId
+    });
+
+    return { 
+      processed: true, 
+      action: 'processed', 
+      reason: `Plan updated to ${newPlanId} for merchant ${merchant.id}` 
+    };
+
+  } catch (err: any) {
+    return { 
+      processed: false, 
+      action: 'error', 
+      reason: `Failed to sync plan: ${err.message}` 
+    };
+  }
+}
+VERIFICATION:
+
+Schema: Ensure the new column exists.
+
+Logic: The webhook handler now actually queries the DB instead of returning a "Pending Implementation" stub.
