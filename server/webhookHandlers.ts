@@ -282,46 +282,36 @@ async function handlePaymentActionRequired(event: Stripe.Event): Promise<Webhook
 }
 
 async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookResult> {
+  // TRUST BOUNDARY CHECK (Security Fix)
+  // SaaS Plans (Free/Pro) are sold by US (The Platform).
+  // If event.account is present, this event came from a User's Connected Account.
+  // We MUST ignore these for billing purposes to prevent the "Free Pro" exploit.
+  if (event.account) {
+    return { 
+      processed: true, 
+      action: 'ignored', 
+      reason: 'Security Guard: Ignoring tenant-side subscription event' 
+    };
+  }
+
   const subscription = event.data.object as Stripe.Subscription;
-  const stripeConnectId = event.account;
+  const stripeCustomerId = subscription.customer as string;
+  const priceId = subscription.items.data[0]?.price.id;
 
-  if (!stripeConnectId) {
+  if (!priceId) {
     return { 
       processed: true, 
-      action: 'error', 
-      reason: 'No Stripe Connect account ID - cannot sync plan' 
+      action: 'ignored', 
+      reason: 'No price ID found in subscription items' 
     };
   }
 
-  try {
-    const factory = await getStripeClientFactory();
-    const { merchantId } = await factory.getClientByConnectId(stripeConnectId);
-
-    const priceId = subscription.items.data[0]?.price.id;
-
-    if (!priceId) {
-      return { 
-        processed: true, 
-        action: 'ignored', 
-        reason: 'No price ID found in subscription items' 
-      };
-    }
-
-    await storage.updateMerchant(merchantId, {
-      subscriptionPlanId: priceId 
-    });
-
-    return { 
-      processed: true, 
-      action: 'processed', 
-      reason: `Merchant plan synced to ${priceId}` 
-    };
-
-  } catch (err: any) {
-    return { 
-      processed: false,
-      action: 'error', 
-      reason: `Failed to sync plan update: ${err.message}` 
-    };
-  }
+  // Platform billing event received - exploit blocked.
+  // Note: Full implementation requires stripeCustomerId lookup in merchants table.
+  // For now, this acts as a pure shield blocking the privilege escalation exploit.
+  return { 
+    processed: true, 
+    action: 'ignored', 
+    reason: 'SaaS Billing Event received (Exploit Blocked). Pending: Schema update for stripeCustomerId lookup.' 
+  };
 }
