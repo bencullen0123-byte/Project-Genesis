@@ -202,7 +202,20 @@ export async function registerRoutes(
       }
 
       const updated = await storage.updateMerchant(id, updateData);
-      res.json(updated);
+      
+      if (!updated) {
+        return res.status(404).json({ message: "Merchant not found" });
+      }
+      
+      // SECURE: Whitelist response fields to prevent leaking sensitive data
+      res.json({
+        id: updated.id,
+        email: updated.email,
+        billingCountry: updated.billingCountry,
+        billingAddress: updated.billingAddress,
+        tier: updated.tier,
+        stripeConnectId: updated.stripeConnectId,
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       log(`Update merchant error: ${errorMessage}`, 'routes', 'error');
