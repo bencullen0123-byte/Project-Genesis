@@ -5,7 +5,7 @@ import { TaskStatus } from '@shared/schema';
 
 export interface WebhookResult {
   processed: boolean;
-  action: 'ignored' | 'enqueued' | 'error';
+  action: 'ignored' | 'enqueued' | 'error' | 'processed';
   reason: string;
   taskId?: number;
 }
@@ -29,6 +29,10 @@ export async function handleStripeWebhook(event: Stripe.Event): Promise<WebhookR
   switch (event.type) {
     case 'invoice.payment_failed':
       return handleInvoicePaymentFailed(event);
+    
+    case 'customer.subscription.updated':
+    case 'customer.subscription.created':
+      return handleSubscriptionUpdated(event);
     
     case 'invoice.payment_action_required':
       return handlePaymentActionRequired(event);
@@ -273,6 +277,51 @@ async function handlePaymentActionRequired(event: Stripe.Event): Promise<Webhook
       processed: false,
       action: 'error',
       reason: `Failed to create action required task: ${error.message}`,
+    };
+  }
+}
+
+async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookResult> {
+  const subscription = event.data.object as Stripe.Subscription;
+  const stripeConnectId = event.account;
+
+  if (!stripeConnectId) {
+    return { 
+      processed: true, 
+      action: 'error', 
+      reason: 'No Stripe Connect account ID - cannot sync plan' 
+    };
+  }
+
+  try {
+    const factory = await getStripeClientFactory();
+    const { merchantId } = await factory.getClientByConnectId(stripeConnectId);
+
+    const priceId = subscription.items.data[0]?.price.id;
+
+    if (!priceId) {
+      return { 
+        processed: true, 
+        action: 'ignored', 
+        reason: 'No price ID found in subscription items' 
+      };
+    }
+
+    await storage.updateMerchant(merchantId, {
+      subscriptionPlanId: priceId 
+    });
+
+    return { 
+      processed: true, 
+      action: 'processed', 
+      reason: `Merchant plan synced to ${priceId}` 
+    };
+
+  } catch (err: any) {
+    return { 
+      processed: false,
+      action: 'error', 
+      reason: `Failed to sync plan update: ${err.message}` 
     };
   }
 }
