@@ -52,7 +52,7 @@ export interface IStorage {
 
   // Tasks - with SELECT FOR UPDATE SKIP LOCKED for concurrency
   getTask(id: number): Promise<ScheduledTask | undefined>;
-  getTasks(status?: string): Promise<ScheduledTask[]>;
+  getTasks(merchantId: string, status?: string): Promise<ScheduledTask[]>;
   getRecentTasks(limit?: number): Promise<ScheduledTask[]>;
   createTask(task: InsertScheduledTask): Promise<ScheduledTask>;
   updateTaskStatus(id: number, status: string): Promise<ScheduledTask | undefined>;
@@ -156,13 +156,18 @@ export class DatabaseStorage implements IStorage {
     return task;
   }
 
-  async getTasks(status?: string): Promise<ScheduledTask[]> {
+  async getTasks(merchantId: string, status?: string): Promise<ScheduledTask[]> {
     if (status && status !== "all") {
       return db.select().from(scheduledTasks)
-        .where(eq(scheduledTasks.status, status))
+        .where(and(
+          eq(scheduledTasks.merchantId, merchantId),
+          eq(scheduledTasks.status, status)
+        ))
         .orderBy(desc(scheduledTasks.createdAt));
     }
-    return db.select().from(scheduledTasks).orderBy(desc(scheduledTasks.createdAt));
+    return db.select().from(scheduledTasks)
+      .where(eq(scheduledTasks.merchantId, merchantId))
+      .orderBy(desc(scheduledTasks.createdAt));
   }
 
   async getRecentTasks(limit: number = 10): Promise<ScheduledTask[]> {

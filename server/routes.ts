@@ -62,7 +62,7 @@ export async function registerRoutes(
   app.get("/api/tasks", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const status = req.query.status as string | undefined;
-      const tasks = await storage.getTasks(status);
+      const tasks = await storage.getTasks(req.merchant!.id, status);
       res.json(tasks);
     } catch (error) {
       console.error("Get tasks error:", error);
@@ -70,13 +70,19 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tasks/:id", async (req, res) => {
+  app.get("/api/tasks/:id", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const task = await storage.getTask(id);
       if (!task) {
         return res.status(404).json({ error: "Task not found" });
       }
+      
+      // SECURITY GATE: Ownership check
+      if (task.merchantId !== req.merchant!.id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      
       res.json(task);
     } catch (error) {
       console.error("Get task error:", error);
@@ -112,12 +118,17 @@ export async function registerRoutes(
     }
   );
 
-  app.post("/api/tasks/:id/retry", async (req, res) => {
+  app.post("/api/tasks/:id/retry", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const task = await storage.getTask(id);
       if (!task) {
         return res.status(404).json({ error: "Task not found" });
+      }
+      
+      // SECURITY GATE: Ownership check
+      if (task.merchantId !== req.merchant!.id) {
+        return res.status(403).json({ error: "Forbidden" });
       }
       
       // Reset task to pending for retry
@@ -137,13 +148,20 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/tasks/:id", async (req, res) => {
+  app.delete("/api/tasks/:id", requireAuth(), requireMerchant, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const deleted = await storage.deleteTask(id);
-      if (!deleted) {
+      const task = await storage.getTask(id);
+      if (!task) {
         return res.status(404).json({ error: "Task not found" });
       }
+      
+      // SECURITY GATE: Ownership check
+      if (task.merchantId !== req.merchant!.id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      
+      const deleted = await storage.deleteTask(id);
       res.json({ success: true });
     } catch (error) {
       console.error("Delete task error:", error);
