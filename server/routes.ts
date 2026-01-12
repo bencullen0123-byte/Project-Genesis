@@ -118,7 +118,7 @@ export async function registerRoutes(
     }
   );
 
-  app.post("/api/tasks/:id/retry", requireAuth(), requireMerchant, async (req, res) => {
+  app.post("/api/tasks/:id/retry", requireAuth(), requireMerchant, checkUsageLimits, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const task = await storage.getTask(id);
@@ -134,7 +134,7 @@ export async function registerRoutes(
       // Reset task to pending for retry
       const updated = await storage.updateTaskStatus(id, "pending");
       
-      // Log the retry
+      // Log the retry (counts against the quota we just checked)
       await storage.createUsageLog({
         merchantId: task.merchantId,
         metricType: "task_retry",
