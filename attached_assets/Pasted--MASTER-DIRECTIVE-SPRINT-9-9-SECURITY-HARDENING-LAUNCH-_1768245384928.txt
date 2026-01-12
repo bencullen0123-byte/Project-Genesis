@@ -1,0 +1,125 @@
+🏗️ MASTER DIRECTIVE: SPRINT 9.9 - SECURITY HARDENING & LAUNCH
+CONTEXT: We are in the Final Hardening Phase prior to Production Launch. A security audit identified two "Kill Chain" vulnerabilities that must be remediated immediately:
+
+Financial Race Condition: The current webhook handler checks if (processed) before locking, allowing parallel requests to double-charge customers.
+
+Data Leak (IDOR): The GET /api/tasks endpoint returns global data instead of tenant-scoped data.
+
+MISSION: Apply strict "Lock-First" concurrency controls and "Tenant-Scoped" access controls to the backend.
+
+📋 PHASE 1: THE FOUNDATION (server/storage.ts)
+Objective: Add atomic database locking capabilities and enforce tenant isolation in queries.
+
+Action Required: Update server/storage.ts to implement the attemptEventLock method and update task fetching signatures.
+
+Specific Implementation:
+
+Modify Interface IStorage:
+
+Update getTasks to accept merchantId: getTasks(merchantId: string, status?: string): Promise<ScheduledTask[]>;
+
+Add attemptEventLock(eventId: string): Promise<boolean>;
+
+Update Class DatabaseStorage:
+
+Implement getTasks:
+
+TypeScript
+
+async getTasks(merchantId: string, status?: string): Promise<ScheduledTask[]> {
+  if (status && status !== "all") {
+    return db.select().from(scheduledTasks)
+      .where(and(
+        eq(scheduledTasks.merchantId, merchantId),
+        eq(scheduledTasks.status, status)
+      ))
+      .orderBy(desc(scheduledTasks.createdAt));
+  }
+  return db.select().from(scheduledTasks)
+    .where(eq(scheduledTasks.merchantId, merchantId))
+    .orderBy(desc(scheduledTasks.createdAt));
+}
+Implement attemptEventLock (Atomic Insert):
+
+TypeScript
+
+async attemptEventLock(eventId: string): Promise<boolean> {
+  const [locked] = await db.insert(processedEvents)
+    .values({ eventId })
+    .onConflictDoNothing()
+    .returning();
+  return !!locked;
+}
+📋 PHASE 2: THE GATEKEEPER (server/webhookHandlers.ts)
+Objective: Eliminate the Double-Billing Race Condition using the new Atomic Lock.
+
+Action Required: Refactor handleStripeWebhook to use "Lock-First" logic and remove redundant checks.
+
+Specific Implementation: Replace the entire handleStripeWebhook function with this concurrency-safe version:
+
+TypeScript
+
+export async function handleStripeWebhook(event: Stripe.Event): Promise<WebhookResult> {
+  const eventId = event.id;
+
+  // 1. ATOMIC LOCK (Critical Fix)
+  // Attempt to insert. If it fails (duplicate), abort immediately.
+  const isFirstProcessing = await storage.attemptEventLock(eventId);
+
+  if (!isFirstProcessing) {
+    return {
+      processed: false,
+      action: 'ignored',
+      reason: `Event ${eventId} handled by parallel worker (idempotency lock)`,
+    };
+  }
+
+  // 2. Routing (Lock acquired, proceed safely)
+  switch (event.type) {
+    case 'invoice.payment_failed':
+      return handleInvoicePaymentFailed(event);
+    case 'invoice.payment_action_required':
+      return handlePaymentActionRequired(event);
+    case 'customer.subscription.deleted':
+      return handleSubscriptionDeleted(event);
+    case 'charge.failed':
+      return handleChargeFailed(event);
+    default:
+      return {
+        processed: true,
+        action: 'ignored',
+        reason: `Event type ${event.type} not handled`,
+      };
+  }
+}
+CRITICAL: Remove all downstream calls to await storage.markEventProcessed(event.id) inside the helper functions. The lock at the entry point is sufficient.
+
+📋 PHASE 3: THE PERIMETER (server/routes.ts)
+Objective: Secure all Task endpoints against IDOR (Insecure Direct Object Reference).
+
+Action Required: Update routes to enforce req.merchant.id ownership checks.
+
+Specific Implementation:
+
+Secure List View (GET /api/tasks):
+
+Old: const tasks = await storage.getTasks(status);
+
+New: const tasks = await storage.getTasks(req.merchant!.id, status);
+
+Secure Single Item Access (GET /api/tasks/:id):
+
+Fetch task: const task = await storage.getTask(id);
+
+Add Guard: if (task.merchantId !== req.merchant!.id) return res.status(403).json({ error: "Forbidden" });
+
+Secure Operations (POST /retry, DELETE /:id):
+
+Apply the same ownership guard (task.merchantId !== req.merchant!.id) before performing any write operations.
+
+✅ VERIFICATION PROTOCOL
+After applying these changes, run this check:
+
+Security Test: Login as User A. Try to fetch a Task ID belonging to User B using curl. Expect 403 Forbidden.
+
+Stability Test: Fire 5 simultaneous requests to the webhook endpoint with the same event_id. Expect exactly 1 success log and 4 "handled by parallel worker" logs.
