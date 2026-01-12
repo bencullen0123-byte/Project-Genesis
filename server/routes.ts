@@ -40,7 +40,7 @@ export async function registerRoutes(
         },
       });
     } catch (error) {
-      console.error("Dashboard error:", error);
+      log(`Dashboard error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to fetch dashboard data" });
     }
   });
@@ -65,7 +65,7 @@ export async function registerRoutes(
       const tasks = await storage.getTasks(req.merchant!.id, status);
       res.json(tasks);
     } catch (error) {
-      console.error("Get tasks error:", error);
+      log(`Get tasks error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to fetch tasks" });
     }
   });
@@ -85,7 +85,7 @@ export async function registerRoutes(
       
       res.json(task);
     } catch (error) {
-      console.error("Get task error:", error);
+      log(`Get task error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to fetch task" });
     }
   });
@@ -112,7 +112,7 @@ export async function registerRoutes(
         if (error instanceof z.ZodError) {
           return res.status(400).json({ error: "Invalid task data", details: error.errors });
         }
-        console.error("Create task error:", error);
+        log(`Create task error: ${error}`, 'routes', 'error');
         res.status(500).json({ error: "Failed to create task" });
       }
     }
@@ -143,7 +143,7 @@ export async function registerRoutes(
       
       res.json(updated);
     } catch (error) {
-      console.error("Retry task error:", error);
+      log(`Retry task error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to retry task" });
     }
   });
@@ -164,7 +164,7 @@ export async function registerRoutes(
       const deleted = await storage.deleteTask(id);
       res.json({ success: true });
     } catch (error) {
-      console.error("Delete task error:", error);
+      log(`Delete task error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to delete task" });
     }
   });
@@ -174,7 +174,7 @@ export async function registerRoutes(
       const count = await storage.deleteCompletedTasks();
       res.json({ deleted: count });
     } catch (error) {
-      console.error("Delete completed tasks error:", error);
+      log(`Delete completed tasks error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to delete completed tasks" });
     }
   });
@@ -205,7 +205,7 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(JSON.stringify({ level: "error", time: Date.now(), msg: `Update merchant error: ${errorMessage}`, source: "routes" }));
+      log(`Update merchant error: ${errorMessage}`, 'routes', 'error');
       res.status(500).json({ message: "Internal Server Error" });
     }
   });
@@ -217,7 +217,7 @@ export async function registerRoutes(
       const logs = await storage.getUsageLogs(req.merchant!.id, metricType, 100);
       res.json(logs);
     } catch (error) {
-      console.error("Get activity error:", error);
+      log(`Get activity error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to fetch activity logs" });
     }
   });
@@ -231,7 +231,7 @@ export async function registerRoutes(
       }
       res.json({ task });
     } catch (error) {
-      console.error("Claim task error:", error);
+      log(`Claim task error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to claim task" });
     }
   });
@@ -264,7 +264,7 @@ export async function registerRoutes(
 
       res.json({ success: true });
     } catch (error) {
-      console.error("Complete task error:", error);
+      log(`Complete task error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to complete task" });
     }
   });
@@ -298,7 +298,7 @@ export async function registerRoutes(
         merchantId: merchant.id,
       });
     } catch (error) {
-      console.error("Stripe connect authorize error:", error);
+      log(`Stripe connect authorize error: ${error}`, 'routes', 'error');
       res.status(500).json({ error: "Failed to initiate Stripe Connect" });
     }
   });
@@ -315,7 +315,7 @@ export async function registerRoutes(
 
         // A. Handle Stripe Errors
         if (oauthError) {
-          console.error("OAuth error:", oauthError, error_description);
+          log(`OAuth error: ${oauthError} - ${error_description}`, 'routes', 'error');
           return res.redirect(`/?error=${encodeURIComponent(error_description as string || 'OAuth failed')}`);
         }
 
@@ -359,7 +359,7 @@ export async function registerRoutes(
 
         res.redirect('/?connected=true');
       } catch (error: any) {
-        console.error("Stripe connect callback error:", error);
+        log(`Stripe connect callback error: ${error.message || error}`, 'routes', 'error');
         res.redirect(`/?error=${encodeURIComponent(error.message || 'Connection failed')}`);
       }
     }
@@ -399,10 +399,10 @@ export async function registerRoutes(
           await tenantClient.subscriptions.cancel(sub.id, undefined, {
             idempotencyKey: `cancel_sub_${merchantId}_${sub.id}`,
           });
-          console.log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`);
+          log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`, 'routes');
         }
       } catch (subError: any) {
-        console.warn(`Failed to cancel subscriptions for merchant ${merchantId}:`, subError.message);
+        log(`Failed to cancel subscriptions for merchant ${merchantId}: ${subError.message}`, 'routes', 'warn');
       }
 
       // Step 2: Deauthorize OAuth connection (optional but recommended)
@@ -415,10 +415,10 @@ export async function registerRoutes(
           }, {
             idempotencyKey: `deauth_${merchantId}_${merchant.stripeUserId}`,
           });
-          console.log(`Deauthorized Stripe account ${merchant.stripeUserId}`);
+          log(`Deauthorized Stripe account ${merchant.stripeUserId}`, 'routes');
         }
       } catch (deauthError: any) {
-        console.warn(`Failed to deauthorize merchant ${merchantId}:`, deauthError.message);
+        log(`Failed to deauthorize merchant ${merchantId}: ${deauthError.message}`, 'routes', 'warn');
       }
 
       // Step 3: Clear Stripe credentials from database
@@ -431,7 +431,7 @@ export async function registerRoutes(
 
       // Step 4: Delete pending/running tasks
       const deletedTasks = await storage.deletePendingTasks(merchantId);
-      console.log(`Deleted ${deletedTasks} pending tasks for merchant ${merchantId}`);
+      log(`Deleted ${deletedTasks} pending tasks for merchant ${merchantId}`, 'routes');
 
       // Log the disconnection
       await storage.createUsageLog({
@@ -440,11 +440,11 @@ export async function registerRoutes(
         amount: 1,
       });
 
-      console.log(`Merchant ${merchantId} disconnected successfully`);
+      log(`Merchant ${merchantId} disconnected successfully`, 'routes');
       
       res.json({ success: true, deletedTasks });
     } catch (error: any) {
-      console.error("Stripe disconnect error:", error);
+      log(`Stripe disconnect error: ${error.message || error}`, 'routes', 'error');
       res.status(500).json({ message: "Failed to disconnect from Stripe" });
     }
   });
