@@ -370,7 +370,11 @@ export async function registerRoutes(
           amount: 1,
         });
 
-        log(`Merchant ${merchant.id} securely connected Stripe account ${response.stripe_user_id}`, 'auth');
+        log(JSON.stringify({
+          msg: 'Merchant connected',
+          merchantId: merchant.id,
+          stripeUserId: response.stripe_user_id
+        }), 'auth');
 
         res.redirect('/?connected=true');
       } catch (error: any) {
@@ -498,17 +502,27 @@ export async function registerRoutes(
       // Delete usage logs
       const deletedLogs = await storage.deleteUsageLogs(merchantId);
       
+      // Delete daily metrics (GDPR compliance - no data residue)
+      const deletedMetrics = await storage.deleteDailyMetrics(merchantId);
+      
       // Delete merchant record
       await storage.deleteMerchant(merchantId);
 
-      log(`GDPR Erasure executed for merchant ${merchantId} (tasks: ${deletedTasks}, logs: ${deletedLogs})`, 'admin');
+      log(JSON.stringify({
+        msg: 'GDPR Erasure executed',
+        merchantId,
+        deletedTasks,
+        deletedLogs,
+        deletedMetrics
+      }), 'admin');
 
       res.json({ 
         success: true, 
         message: 'Merchant data permanently erased',
         deleted: {
           tasks: deletedTasks,
-          usageLogs: deletedLogs
+          usageLogs: deletedLogs,
+          dailyMetrics: deletedMetrics
         }
       });
     } catch (error: any) {

@@ -81,6 +81,7 @@ export interface IStorage {
   // Daily Metrics
   getDailyMetrics(merchantId: string, days?: number): Promise<DailyMetric[]>;
   updateDailyMetrics(merchantId: string, recoveredCents: number, emailsSent?: number): Promise<DailyMetric>;
+  deleteDailyMetrics(merchantId: string): Promise<number>;
   getDashboardMetrics(merchantId: string): Promise<{
     totalRecoveredCents: number;
     totalEmailsSent: number;
@@ -478,6 +479,13 @@ export class DatabaseStorage implements IStorage {
       totalRecoveredCents: Number(result?.totalRecoveredCents || 0),
       totalEmailsSent: result?.totalEmailsSent || 0,
     };
+  }
+
+  async deleteDailyMetrics(merchantId: string): Promise<number> {
+    const result = await db.delete(dailyMetrics)
+      .where(eq(dailyMetrics.merchantId, merchantId))
+      .returning();
+    return result.length;
   }
 
   async hasWeeklyDigestTask(merchantId: string): Promise<boolean> {
