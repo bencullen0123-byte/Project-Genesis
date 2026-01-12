@@ -60,6 +60,7 @@ export interface IStorage {
   deleteTask(id: number): Promise<boolean>;
   deleteCompletedTasks(): Promise<number>;
   deletePendingTasks(merchantId: string): Promise<number>;
+  deleteAllTasksForMerchant(merchantId: string): Promise<number>;
 
   // Usage Logs
   getUsageLogs(merchantId?: string, metricType?: string, limit?: number): Promise<UsageLog[]>;
@@ -254,6 +255,13 @@ export class DatabaseStorage implements IStorage {
         eq(scheduledTasks.merchantId, merchantId),
         sql`status IN ('pending', 'running')`
       ))
+      .returning();
+    return result.length;
+  }
+
+  async deleteAllTasksForMerchant(merchantId: string): Promise<number> {
+    const result = await db.delete(scheduledTasks)
+      .where(eq(scheduledTasks.merchantId, merchantId))
       .returning();
     return result.length;
   }

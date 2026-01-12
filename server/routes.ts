@@ -477,8 +477,8 @@ export async function registerRoutes(
         return;
       }
 
-      // Cascade delete: tasks first
-      const deletedTasks = await storage.deletePendingTasks(merchantId);
+      // GDPR Hard Delete: Remove ALL tasks (pending, running, completed, failed)
+      const deletedTasks = await storage.deleteAllTasksForMerchant(merchantId);
       
       // Delete usage logs
       const deletedLogs = await storage.deleteUsageLogs(merchantId);
