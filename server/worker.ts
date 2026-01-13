@@ -164,7 +164,10 @@ async function processReportUsage(task: ScheduledTask): Promise<void> {
             continue;
           }
           
-          const stripe = await factory.getClient(merchantId);
+          // CRITICAL FIX: Use Platform Client for meter events
+          // Meter events belong to the Platform Subscription, not the Connected Account.
+          // Using getClient(merchantId) causes a resource_missing error from Stripe.
+          const stripe = await factory.getPlatformClient();
           
           for (const logEntry of logs) {
             if (logEntry.metricType !== 'dunning_email_sent') {
