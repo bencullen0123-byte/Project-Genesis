@@ -8,6 +8,7 @@ import { getStripeClientFactory } from "./stripeClient";
 import { checkUsageLimits, requireMerchant } from "./middleware";
 import { log } from "./index";
 import { requireAuth } from '@clerk/express';
+import { PLANS } from '@shared/plans';
 
 export async function registerRoutes(
   httpServer: Server,
@@ -23,9 +24,9 @@ export async function registerRoutes(
       const recentActivity = await storage.getUsageLogs(merchant.id, undefined, 10);
 
       const monthlyCount = await storage.getMonthlyDunningCount(merchant.id);
-      const plan = merchant.subscriptionPlanId || 'price_free';
-      const limit = plan === 'price_pro' ? 10000 : 1000;
-      const usage = { current: monthlyCount, limit };
+      const planId = merchant.subscriptionPlanId || 'price_free';
+      const planConfig = PLANS[planId] ?? PLANS['default'];
+      const usage = { current: monthlyCount, limit: planConfig.limit };
 
       res.json({
         stats,
@@ -190,12 +191,12 @@ export async function registerRoutes(
         return res.sendStatus(403);
       }
 
-      const { billingCountry, billingAddress, email } = req.body;
+      // SECURITY: Email removed from allowed fields to prevent spoofing
+      const { billingCountry, billingAddress } = req.body;
 
       const updateData: Record<string, string | null> = {};
       if (billingCountry !== undefined) updateData.billingCountry = billingCountry;
       if (billingAddress !== undefined) updateData.billingAddress = billingAddress;
-      if (email !== undefined) updateData.email = email;
 
       if (Object.keys(updateData).length === 0) {
         return res.status(400).json({ message: "No valid fields to update" });
@@ -500,6 +501,34 @@ export async function registerRoutes(
       if (!merchant) {
         res.status(404).json({ error: 'Not Found', message: 'Merchant not found' });
         return;
+      }
+
+      // STRIPE DE-PROVISIONING: Cancel subscriptions and revoke access before DB delete
+      if (merchant.stripeConnectId) {
+        try {
+          const factory = await getStripeClientFactory();
+          const stripe = await factory.getClient(merchantId);
+          
+          // List and cancel all active subscriptions for this connected account
+          const subscriptions = await stripe.subscriptions.list({
+            limit: 100,
+            status: 'active',
+          });
+          
+          for (const sub of subscriptions.data) {
+            try {
+              await stripe.subscriptions.cancel(sub.id);
+              log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`, 'admin');
+            } catch (subError: any) {
+              log(`Failed to cancel subscription ${sub.id}: ${subError.message}`, 'admin', 'warn');
+            }
+          }
+          
+          log(`Stripe de-provisioned for merchant ${merchantId}`, 'admin');
+        } catch (stripeError: any) {
+          log(`Stripe de-provisioning error for ${merchantId}: ${stripeError.message}`, 'admin', 'warn');
+          // Continue with deletion even if Stripe fails
+        }
       }
 
       // GDPR Hard Delete: Remove ALL tasks (pending, running, completed, failed)

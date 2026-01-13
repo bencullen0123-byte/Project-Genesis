@@ -3,6 +3,7 @@ import { log } from './index';
 import { getStripeClientFactory } from './stripeClient';
 import { sendDunningEmail, sendActionRequiredEmail, sendWeeklyDigest } from './email';
 import type { ScheduledTask, UsageLog } from '@shared/schema';
+import { PLANS } from '@shared/plans';
 
 const POLL_INTERVAL_MS = 1000;
 const ERROR_BACKOFF_MS = 5000;
@@ -10,9 +11,10 @@ const TASK_FOUND_DELAY_MS = 100;
 const REPORT_USAGE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const WEEKLY_DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// Quota guard helper - returns monthly email limit based on plan
+// Quota guard helper - returns monthly email limit based on plan (centralized from @shared/plans)
 function getPlanLimit(planId: string | null): number {
-  return planId === 'price_pro' ? 10000 : 1000;
+  const plan = planId ? PLANS[planId] : PLANS['default'];
+  return plan?.limit ?? PLANS['default'].limit;
 }
 
 async function processTask(task: ScheduledTask): Promise<void> {
@@ -134,140 +136,146 @@ async function processTask(task: ScheduledTask): Promise<void> {
 }
 
 async function processReportUsage(task: ScheduledTask): Promise<void> {
-  log('Starting usage report cycle...', 'worker');
-  
-  const pendingLogs = await storage.getPendingUsageLogs(100);
-  
-  if (pendingLogs.length === 0) {
-    log('No pending usage logs to report', 'worker');
-  } else {
-    const byMerchant = new Map<string, UsageLog[]>();
-    for (const logEntry of pendingLogs) {
-      const existing = byMerchant.get(logEntry.merchantId) || [];
-      existing.push(logEntry);
-      byMerchant.set(logEntry.merchantId, existing);
-    }
+  try {
+    log('Starting usage report cycle...', 'worker');
     
-    log(`Found ${pendingLogs.length} pending usage logs across ${byMerchant.size} merchants`, 'worker');
+    const pendingLogs = await storage.getPendingUsageLogs(100);
     
-    const factory = await getStripeClientFactory();
-    const reportedIds: number[] = [];
-    
-    for (const [merchantId, logs] of Array.from(byMerchant.entries())) {
-      try {
-        const merchant = await storage.getMerchant(merchantId);
-        if (!merchant?.stripeConnectId) {
-          log(`Merchant ${merchantId} has no Stripe Connect ID, skipping`, 'worker');
-          continue;
-        }
-        
-        const stripe = await factory.getClient(merchantId);
-        
-        for (const logEntry of logs) {
-          if (logEntry.metricType !== 'dunning_email_sent') {
-            reportedIds.push(logEntry.id);
+    if (pendingLogs.length === 0) {
+      log('No pending usage logs to report', 'worker');
+    } else {
+      const byMerchant = new Map<string, UsageLog[]>();
+      for (const logEntry of pendingLogs) {
+        const existing = byMerchant.get(logEntry.merchantId) || [];
+        existing.push(logEntry);
+        byMerchant.set(logEntry.merchantId, existing);
+      }
+      
+      log(`Found ${pendingLogs.length} pending usage logs across ${byMerchant.size} merchants`, 'worker');
+      
+      const factory = await getStripeClientFactory();
+      const reportedIds: number[] = [];
+      
+      for (const [merchantId, logs] of Array.from(byMerchant.entries())) {
+        try {
+          const merchant = await storage.getMerchant(merchantId);
+          if (!merchant?.stripeConnectId) {
+            log(`Merchant ${merchantId} has no Stripe Connect ID, skipping`, 'worker');
             continue;
           }
           
-          try {
-            const idempotencyKey = `usage_log_${logEntry.id}`;
-            
-            await stripe.billing.meterEvents.create({
-              event_name: 'dunning_email_sent',
-              payload: {
-                value: String(logEntry.amount),
-                stripe_customer_id: merchant.stripeConnectId,
-              },
-            }, {
-              idempotencyKey,
-            });
-            
-            reportedIds.push(logEntry.id);
-            log(`Reported usage log ${logEntry.id} to Stripe`, 'worker');
-          } catch (stripeError: any) {
-            if (stripeError.code === 'idempotency_key_in_use') {
+          const stripe = await factory.getClient(merchantId);
+          
+          for (const logEntry of logs) {
+            if (logEntry.metricType !== 'dunning_email_sent') {
               reportedIds.push(logEntry.id);
-              log(`Usage log ${logEntry.id} already reported (idempotent)`, 'worker');
-            } else {
-              // POISON PILL HANDLING: Detect permanent vs transient errors
-              // Permanent errors (4xx) will never succeed on retry - skip them to unblock the queue
-              const isPermanent = 
-                stripeError.type === 'StripeInvalidRequestError' || 
-                stripeError.statusCode === 400 || 
-                stripeError.statusCode === 404 ||
-                (stripeError.code && stripeError.code.startsWith('resource_'));
-
-              if (isPermanent) {
-                log(`Poison Pill: Usage log ${logEntry.id} failed permanently: ${stripeError.message}. Skipping.`, 'worker', 'error');
-                reportedIds.push(logEntry.id); // Remove from queue
+              continue;
+            }
+            
+            try {
+              const idempotencyKey = `usage_log_${logEntry.id}`;
+              
+              await stripe.billing.meterEvents.create({
+                event_name: 'dunning_email_sent',
+                payload: {
+                  value: String(logEntry.amount),
+                  stripe_customer_id: merchant.stripeConnectId,
+                },
+              }, {
+                idempotencyKey,
+              });
+              
+              reportedIds.push(logEntry.id);
+              log(`Reported usage log ${logEntry.id} to Stripe`, 'worker');
+            } catch (stripeError: any) {
+              if (stripeError.code === 'idempotency_key_in_use') {
+                reportedIds.push(logEntry.id);
+                log(`Usage log ${logEntry.id} already reported (idempotent)`, 'worker');
               } else {
-                // Transient error (Network, 500, Rate Limit) - will be retried next tick
-                log(`Transient usage reporting error for log ${logEntry.id}: ${stripeError.message}`, 'worker', 'warn');
+                // POISON PILL HANDLING: Detect permanent vs transient errors
+                // Permanent errors (4xx) will never succeed on retry - skip them to unblock the queue
+                const isPermanent = 
+                  stripeError.type === 'StripeInvalidRequestError' || 
+                  stripeError.statusCode === 400 || 
+                  stripeError.statusCode === 404 ||
+                  (stripeError.code && stripeError.code.startsWith('resource_'));
+
+                if (isPermanent) {
+                  log(`Poison Pill: Usage log ${logEntry.id} failed permanently: ${stripeError.message}. Skipping.`, 'worker', 'error');
+                  reportedIds.push(logEntry.id); // Remove from queue
+                } else {
+                  // Transient error (Network, 500, Rate Limit) - will be retried next tick
+                  log(`Transient usage reporting error for log ${logEntry.id}: ${stripeError.message}`, 'worker', 'warn');
+                }
               }
             }
           }
+        } catch (merchantError: any) {
+          log(`Error processing merchant ${merchantId}: ${merchantError.message}`, 'worker');
         }
-      } catch (merchantError: any) {
-        log(`Error processing merchant ${merchantId}: ${merchantError.message}`, 'worker');
+      }
+      
+      if (reportedIds.length > 0) {
+        await storage.markUsageAsReported(reportedIds);
+        log(`Marked ${reportedIds.length} usage logs as reported`, 'worker');
       }
     }
+  } finally {
+    // IMMORTAL WORKER: Always schedule next run, even if work fails
+    const runAt = new Date(Date.now() + REPORT_USAGE_INTERVAL_MS);
+    await storage.createTask({
+      merchantId: 'system',
+      taskType: 'report_usage',
+      payload: { scheduledBy: 'reporter_cycle' },
+      status: 'pending',
+      runAt,
+    });
     
-    if (reportedIds.length > 0) {
-      await storage.markUsageAsReported(reportedIds);
-      log(`Marked ${reportedIds.length} usage logs as reported`, 'worker');
-    }
+    log(`Scheduled next report_usage task at ${runAt.toISOString()}`, 'worker');
   }
-  
-  const runAt = new Date(Date.now() + REPORT_USAGE_INTERVAL_MS);
-  await storage.createTask({
-    merchantId: 'system',
-    taskType: 'report_usage',
-    payload: { scheduledBy: 'reporter_cycle' },
-    status: 'pending',
-    runAt,
-  });
-  
-  log(`Scheduled next report_usage task at ${runAt.toISOString()}`, 'worker');
 }
 
 async function processWeeklyDigest(task: ScheduledTask): Promise<void> {
-  log(`Processing weekly digest for merchant ${task.merchantId}`, 'worker');
-  
-  const merchant = await storage.getMerchant(task.merchantId);
-  if (!merchant) {
-    log(`Merchant ${task.merchantId} not found, skipping weekly digest`, 'worker');
-    return;
+  try {
+    log(`Processing weekly digest for merchant ${task.merchantId}`, 'worker');
+    
+    const merchant = await storage.getMerchant(task.merchantId);
+    if (!merchant) {
+      log(`Merchant ${task.merchantId} not found, skipping weekly digest`, 'worker');
+      return;
+    }
+    
+    if (!merchant.email) {
+      log(`Merchant ${task.merchantId} has no email, skipping weekly digest`, 'worker');
+      return;
+    }
+    
+    const weeklyMetrics = await storage.getWeeklyMetrics(task.merchantId);
+    
+    const emailSent = await sendWeeklyDigest(merchant.email, {
+      totalRecoveredCents: weeklyMetrics.totalRecoveredCents,
+      totalEmailsSent: weeklyMetrics.totalEmailsSent,
+      merchantId: task.merchantId,
+    });
+    
+    if (emailSent) {
+      log(`Weekly digest sent to ${merchant.email}`, 'worker');
+    } else {
+      throw new Error('Failed to send weekly digest email');
+    }
+  } finally {
+    // IMMORTAL WORKER: Always schedule next run, even if work fails
+    const runAt = new Date(Date.now() + WEEKLY_DIGEST_INTERVAL_MS);
+    await storage.createTask({
+      merchantId: task.merchantId,
+      taskType: 'send_weekly_digest',
+      payload: { scheduledBy: 'digest_cycle' },
+      status: 'pending',
+      runAt,
+    });
+    
+    log(`Scheduled next weekly digest at ${runAt.toISOString()}`, 'worker');
   }
-  
-  if (!merchant.email) {
-    log(`Merchant ${task.merchantId} has no email, skipping weekly digest`, 'worker');
-    return;
-  }
-  
-  const weeklyMetrics = await storage.getWeeklyMetrics(task.merchantId);
-  
-  const emailSent = await sendWeeklyDigest(merchant.email, {
-    totalRecoveredCents: weeklyMetrics.totalRecoveredCents,
-    totalEmailsSent: weeklyMetrics.totalEmailsSent,
-    merchantId: task.merchantId,
-  });
-  
-  if (emailSent) {
-    log(`Weekly digest sent to ${merchant.email}`, 'worker');
-  } else {
-    throw new Error('Failed to send weekly digest email');
-  }
-  
-  const runAt = new Date(Date.now() + WEEKLY_DIGEST_INTERVAL_MS);
-  await storage.createTask({
-    merchantId: task.merchantId,
-    taskType: 'send_weekly_digest',
-    payload: { scheduledBy: 'digest_cycle' },
-    status: 'pending',
-    runAt,
-  });
-  
-  log(`Scheduled next weekly digest at ${runAt.toISOString()}`, 'worker');
 }
 
 export function startWorker(): void {
