@@ -369,7 +369,7 @@ export async function registerRoutes(
         // C. CSRF CHECK (The Fix)
         // Ensure the state in the URL matches the state we saved in the user's DB record
         if (!merchant.oauthState || merchant.oauthState !== state) {
-          log(`CSRF Mismatch for merchant ${merchant.id}. Expected ${merchant.oauthState}, got ${state}`, 'security', 'error');
+          log(`CSRF Mismatch for merchant ${merchant.id}. State verification failed.`, 'security', 'error');
           return res.redirect('/?error=Security violation: Invalid or expired state token');
         }
 
@@ -500,7 +500,12 @@ export async function registerRoutes(
       return;
     }
 
-    if (!adminKey || adminKey !== envAdminKey) {
+    // Use constant-time comparison to prevent timing attacks
+    const providedBuffer = Buffer.from(adminKey || '');
+    const correctBuffer = Buffer.from(envAdminKey);
+    
+    if (providedBuffer.length !== correctBuffer.length || 
+        !crypto.timingSafeEqual(providedBuffer, correctBuffer)) {
       log('GDPR erasure rejected: invalid admin key', 'admin', 'warn');
       res.status(403).json({ error: 'Forbidden', message: 'Invalid admin credentials' });
       return;
