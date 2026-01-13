@@ -159,8 +159,8 @@ async function processReportUsage(task: ScheduledTask): Promise<void> {
       for (const [merchantId, logs] of Array.from(byMerchant.entries())) {
         try {
           const merchant = await storage.getMerchant(merchantId);
-          if (!merchant?.stripeConnectId) {
-            log(`Merchant ${merchantId} has no Stripe Connect ID, skipping`, 'worker');
+          if (!merchant?.stripeConnectId || !merchant?.stripeCustomerId) {
+            log(`Merchant ${merchantId} missing Stripe Connect ID or Customer ID, skipping`, 'worker');
             continue;
           }
           
