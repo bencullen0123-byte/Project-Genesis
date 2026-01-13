@@ -118,6 +118,12 @@ async function processTask(task: ScheduledTask): Promise<void> {
       });
       
       if (emailSent) {
+        // Log usage for action required emails (same as dunning emails)
+        await storage.createUsageLog({
+          merchantId: task.merchantId,
+          metricType: 'dunning_email_sent',
+          amount: 1,
+        });
         log(`Action required email sent for invoice ${payload.invoiceId}`, 'worker');
       } else {
         throw new Error('Failed to send action required email');

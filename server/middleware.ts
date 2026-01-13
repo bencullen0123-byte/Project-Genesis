@@ -58,6 +58,9 @@ export async function requireMerchant(
   }
 }
 
+// Task types that cost money and count against quota
+const METERED_TASKS = ['dunning_retry', 'notify_action_required'];
+
 export async function checkUsageLimits(
   req: Request, 
   res: Response, 
@@ -70,6 +73,15 @@ export async function checkUsageLimits(
     return;
   }
 
+  // Only check limits for metered task creation
+  const isTaskCreation = req.method === 'POST' && req.path === '/api/tasks';
+  const taskType = req.body?.taskType;
+  
+  if (!isTaskCreation || !METERED_TASKS.includes(taskType)) {
+    next();
+    return;
+  }
+
   try {
     const plan = PLANS[merchant.subscriptionPlanId || ''] || PLANS['default'];
     const limit = plan.limit;
@@ -77,10 +89,10 @@ export async function checkUsageLimits(
     const monthlyCount = await storage.getMonthlyDunningCount(merchant.id);
     
     if (monthlyCount >= limit) {
-      log(`Usage limit exceeded for merchant ${merchant.id}: ${monthlyCount}/${limit} (${plan.name} plan)`, 'middleware');
-      res.status(402).json({ 
-        error: 'Payment Required',
-        message: `Monthly limit of ${limit} exceeded. Please upgrade your plan.`,
+      log(`Blocked ${taskType} for merchant ${merchant.id}: ${monthlyCount}/${limit} (${plan.name} plan)`, 'middleware', 'warn');
+      res.status(403).json({ 
+        error: 'Forbidden',
+        message: `Usage limit exceeded. Please upgrade your plan.`,
         usage: {
           current: monthlyCount,
           limit: limit,
