@@ -289,8 +289,55 @@ async function processWeeklyDigest(task: ScheduledTask): Promise<void> {
   }
 }
 
+// WATCHDOG: Ensure critical system tasks are always running
+// This protects against DB glitches that break chain-reaction scheduling
+async function ensureSystemTasks(): Promise<void> {
+  try {
+    log('Watchdog: Checking for missing system tasks...', 'worker');
+    
+    // Check for global report_usage task (system merchant)
+    const hasReporter = await storage.hasReportUsageTask();
+    if (!hasReporter) {
+      await storage.createTask({
+        merchantId: 'system',
+        taskType: 'report_usage',
+        payload: { scheduledBy: 'watchdog' },
+        status: 'pending',
+        runAt: new Date(),
+      });
+      log('Watchdog: Resurrected global report_usage task', 'worker', 'warn');
+    }
+    
+    // Check for weekly digest tasks for all real merchants
+    const merchants = await storage.getMerchants();
+    for (const merchant of merchants) {
+      // Skip the system merchant
+      if (merchant.id === 'system') continue;
+      
+      const hasDigest = await storage.hasWeeklyDigestTask(merchant.id);
+      if (!hasDigest) {
+        await storage.createTask({
+          merchantId: merchant.id,
+          taskType: 'send_weekly_digest',
+          payload: { scheduledBy: 'watchdog' },
+          status: 'pending',
+          runAt: new Date(),
+        });
+        log(`Watchdog: Resurrected weekly_digest for ${merchant.id}`, 'worker', 'warn');
+      }
+    }
+    
+    log('Watchdog: System task check complete', 'worker');
+  } catch (error: any) {
+    log(`Watchdog Error: ${error.message}`, 'worker', 'error');
+  }
+}
+
 export function startWorker(): void {
   log('Worker starting...', 'worker');
+  
+  // Boot the Watchdog to ensure critical tasks exist
+  ensureSystemTasks();
 
   async function run(): Promise<void> {
     try {

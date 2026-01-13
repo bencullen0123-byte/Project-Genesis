@@ -553,6 +553,7 @@ export async function registerRoutes(
       }
 
       // STRIPE DE-PROVISIONING: Cancel subscriptions and revoke access before DB delete
+      // KILL SWITCH: If this fails, we MUST abort to prevent zombie billing
       if (merchant.stripeConnectId) {
         try {
           const factory = await getStripeClientFactory();
@@ -565,18 +566,21 @@ export async function registerRoutes(
           });
           
           for (const sub of subscriptions.data) {
-            try {
-              await stripe.subscriptions.cancel(sub.id);
-              log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`, 'admin');
-            } catch (subError: any) {
-              log(`Failed to cancel subscription ${sub.id}: ${subError.message}`, 'admin', 'warn');
-            }
+            await stripe.subscriptions.cancel(sub.id);
+            log(`Cancelled subscription ${sub.id} for merchant ${merchantId}`, 'admin');
           }
           
           log(`Stripe de-provisioned for merchant ${merchantId}`, 'admin');
         } catch (stripeError: any) {
-          log(`Stripe de-provisioning error for ${merchantId}: ${stripeError.message}`, 'admin', 'warn');
-          // Continue with deletion even if Stripe fails
+          // CRITICAL FIX: STOP EVERYTHING
+          // If we delete the DB record now, we create a "Zombie User" (Billed but no login).
+          log(`ABORTING ERASURE: Stripe de-provisioning failed for ${merchantId}: ${stripeError.message}`, 'admin', 'error');
+          
+          res.status(502).json({ 
+            error: 'Upstream Error', 
+            message: 'Failed to cancel Stripe subscriptions. Data NOT deleted to prevent zombie billing. Please retry.' 
+          });
+          return;
         }
       }
 
