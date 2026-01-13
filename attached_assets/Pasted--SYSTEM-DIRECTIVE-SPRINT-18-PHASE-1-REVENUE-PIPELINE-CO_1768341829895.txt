@@ -1,0 +1,86 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 18 - PHASE 1 (REVENUE PIPELINE)
+CONTEXT: The billing system has two fatal integration flaws:
+
+Ticket 18.1 (Identity Crisis): Stripe sends Price IDs (e.g., price_123...), but our app expects Plan Keys (price_pro). We are saving the raw ID, causing the system to fallback to "Basic" limits for paid users.
+
+Ticket 18.2 (The Missing Door): The handleStripeWebhook function is written but never connected to an API route. Stripe events hit a 404 wall.
+
+OBJECTIVE: Implement the "Plan Mapper" translation layer and open the Webhook Route.
+
+ACTION PLAN
+Target File 1: server/webhookHandlers.ts (Ticket 18.1)
+
+Step 1: Implement Plan Mapping Locate the handleSubscriptionUpdated function.
+
+Change: Instead of saving the raw priceId, map it to our internal keys.
+
+TypeScript
+
+// server/webhookHandlers.ts
+
+// ... inside handleSubscriptionUpdated ...
+
+    if (!priceId) {
+      return { 
+        processed: true, 
+        action: 'ignored', 
+        reason: 'No price ID found in subscription items' 
+      };
+    }
+
+    // 1. MAP STRIPE PRICE ID TO INTERNAL PLAN KEY
+    // This prevents the "Paid but Blocked" bug.
+    // We use environment variables to allow flexibility between Test/Prod modes.
+    const PRICE_MAP: Record<string, string> = {
+      [process.env.STRIPE_PRICE_ID_PRO || 'price_pro_test']: 'price_pro',
+      [process.env.STRIPE_PRICE_ID_FREE || 'price_free_test']: 'price_free'
+    };
+
+    // If the price isn't in our map, we don't break, but we might fall back to free or keep raw
+    // Ideally, we map it.
+    const internalPlanId = PRICE_MAP[priceId] || 'price_free';
+
+    try {
+      const merchant = await storage.getMerchantByStripeCustomerId(stripeCustomerId);
+      // ... (rest of the function)
+      
+      // Update logic:
+      const isActive = status === 'active' || status === 'trialing';
+      const finalPlanId = isActive ? internalPlanId : 'price_free';
+
+      await storage.updateMerchant(merchant.id, {
+        subscriptionPlanId: finalPlanId
+      });
+      // ...
+Target File 2: server/routes.ts (Ticket 18.2)
+
+Step 2: Register the Webhook Route
+
+Import: Ensure handleStripeWebhook is imported.
+
+Route: Add the POST route.
+
+TypeScript
+
+// server/routes.ts
+import { handleStripeWebhook } from "./webhookHandlers"; // Add to imports
+
+// ... inside registerRoutes ...
+
+  // STRIPE WEBHOOK LISTENER
+  // This must be publicly accessible to receive events from Stripe.
+  app.post("/api/webhooks/stripe", async (req, res) => {
+    try {
+      // Note: In production, verify req.headers['stripe-signature'] here.
+      const result = await handleStripeWebhook(req.body);
+      res.json(result);
+    } catch (err) {
+      log(`Webhook Error: ${err}`, 'stripe', 'error');
+      res.status(400).send(`Webhook Error: ${err}`);
+    }
+  });
+VERIFICATION:
+
+Route Check: POST /api/webhooks/stripe should no longer return 404 (it might return "Event type not handled" which is a success).
+
+Logic Check: If you simulate a customer.subscription.updated event with a dummy price ID, the database should store price_free (or the mapped value), NOT the raw ID.
