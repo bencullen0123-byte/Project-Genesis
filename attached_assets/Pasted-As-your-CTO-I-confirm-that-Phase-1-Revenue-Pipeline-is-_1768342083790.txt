@@ -1,0 +1,128 @@
+As your CTO, I confirm that Phase 1 (Revenue Pipeline) is COMPLETE.
+
+You have successfully connected the "Money Pipe" (Webhooks) and the "Translation Layer" (Price Map). We can now actually get paid.
+
+🚀 SPRINT 18 - PHASE 2: SAFETY & UPTIME
+We now move to the final stage of the Integration Lockdown.
+
+Ticket 18.3 (The Kill Switch): We must stop the "Zombie Billing" liability. If Stripe fails to cancel, we cannot delete the user account.
+
+Ticket 18.4 (The Watchdog): We must ensure the worker loop never dies. If the database blips and a task isn't rescheduled, the Watchdog restarts it.
+
+Copy and paste this directive into Replit.
+
+🚨 SYSTEM DIRECTIVE: SPRINT 18 - PHASE 2 (SAFETY & UPTIME)
+CONTEXT:
+
+Liability: The admin deletion route (server/routes.ts) currently catches Stripe errors, logs them, and proceeds to delete the merchant from the DB. This leaves the customer being charged forever with no way to log in and cancel.
+
+Fragility: The worker.ts relies on "chain-reaction" scheduling. If a task fails to schedule its successor (e.g., DB glitch), the merchant's background jobs stop forever.
+
+OBJECTIVE: Implement the "Safe Deletion Guard" and the "Worker Watchdog."
+
+ACTION PLAN
+Target File 1: server/routes.ts (Ticket 18.3)
+
+Step 1: Implement the Kill Switch Locate the DELETE /api/admin/merchants/:id handler. Find the try/catch block surrounding the Stripe de-provisioning.
+
+Change: Instead of swallowing the error, return a 502 response to abort the operation.
+
+TypeScript
+
+// server/routes.ts - Inside DELETE handler
+
+      // STRIPE DE-PROVISIONING
+      if (merchant.stripeConnectId) {
+        try {
+          const factory = await getStripeClientFactory();
+          const stripe = await factory.getClient(merchantId);
+          
+          // ... (existing cancellation loop) ...
+          
+          log(`Stripe de-provisioned for merchant ${merchantId}`, 'admin');
+        } catch (stripeError: any) {
+          // CRITICAL FIX: STOP EVERYTHING
+          // If we delete the DB record now, we create a "Zombie User" (Billed but no login).
+          log(`ABORTING ERASURE: Stripe de-provisioning failed for ${merchantId}: ${stripeError.message}`, 'admin', 'error');
+          
+          return res.status(502).json({ 
+            error: 'Upstream Error', 
+            message: 'Failed to cancel Stripe subscriptions. Data NOT deleted to prevent zombie billing. Please retry.' 
+          });
+        }
+      }
+Target File 2: server/worker.ts (Ticket 18.4)
+
+Step 2: Implement the Watchdog Add a new function ensureSystemTasks and call it inside startWorker.
+
+TypeScript
+
+// server/worker.ts
+
+// 1. Add Watchdog Function
+async function ensureSystemTasks() {
+  try {
+    log('Watchdog: Checking for missing system tasks...', 'worker');
+    const merchants = await storage.getMerchants(); // Ensure this method exists in storage interface
+    
+    for (const merchant of merchants) {
+      // Check for Weekly Digest
+      // Note: We need a way to check if a task exists. 
+      // If storage.getTasks is expensive, we might need a specific 'hasPendingTask' method.
+      // For MVP, we check the tasks list.
+      const tasks = await storage.getTasks(merchant.id);
+      
+      const hasDigest = tasks.some(t => t.taskType === 'send_weekly_digest' && t.status === 'pending');
+      const hasReporter = tasks.some(t => t.taskType === 'report_usage' && t.status === 'pending');
+
+      if (!hasDigest) {
+        await storage.createTask({
+          merchantId: merchant.id,
+          taskType: 'send_weekly_digest',
+          payload: { scheduledBy: 'watchdog' },
+          status: 'pending',
+          runAt: new Date(), // Run immediately to restart cycle
+        });
+        log(`Watchdog: Resurrected weekly_digest for ${merchant.id}`, 'worker', 'warn');
+      }
+
+      // 'report_usage' is a SYSTEM task (merchantId='system'), not per-merchant
+      // So we check it globally outside the loop or handle per-merchant if architected that way.
+      // Based on previous code, report_usage seems to run globally for 'system'.
+    }
+
+    // Check Global Reporter Task
+    // We assume 'system' merchant ID for the global reporter based on previous files
+    const systemTasks = await storage.getTasks('system'); 
+    const hasGlobalReporter = systemTasks.some(t => t.taskType === 'report_usage' && t.status === 'pending');
+    
+    if (!hasGlobalReporter) {
+       await storage.createTask({
+          merchantId: 'system',
+          taskType: 'report_usage',
+          payload: { scheduledBy: 'watchdog' },
+          status: 'pending',
+          runAt: new Date(),
+       });
+       log(`Watchdog: Resurrected global report_usage task`, 'worker', 'warn');
+    }
+
+  } catch (error: any) {
+    log(`Watchdog Error: ${error.message}`, 'worker', 'error');
+  }
+}
+
+// 2. Call in startWorker
+export function startWorker(): void {
+  log('Worker starting...', 'worker');
+
+  // Boot the Watchdog
+  ensureSystemTasks();
+
+  async function run(): Promise<void> {
+    // ... existing run loop ...
+VERIFICATION:
+
+Safety: If you disconnect the internet and try to Admin Delete a user, it should fail with 502 and the user should remain in the DB.
+
+Uptime: On server restart, the logs should show "Watchdog: Checking..." and "Resurrected..." if you manually deleted the tasks from the DB.
