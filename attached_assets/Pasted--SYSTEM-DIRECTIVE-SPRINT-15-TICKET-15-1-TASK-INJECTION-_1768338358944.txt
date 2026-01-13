@@ -1,0 +1,61 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 15 - TICKET 15.1 (TASK INJECTION)
+CONTEXT: The POST /api/tasks endpoint currently accepts any taskType and payload from the request body. A malicious user can:
+
+DoS Attack: Flood the worker queue with garbage tasks (e.g., type: "infinite_loop").
+
+Metric Spoofing: Inject tasks with status: "completed" to fake their usage statistics.
+
+System Sabotage: Trigger system-only tasks like report_usage out of cycle.
+
+OBJECTIVE: Lock down the endpoint. Implement strict whitelisting for task types and strictly enforce server-side control over task status and scheduling.
+
+ACTION PLAN
+Target File: server/routes.ts
+
+Step 1: Locate the Route Find app.post("/api/tasks", ...)
+
+Step 2: Secure Implementation Replace the existing handler with this whitelist-enforced logic:
+
+TypeScript
+
+// SECURED: Create Task (User Initiated)
+app.post("/api/tasks", requireAuth(), requireMerchant, async (req, res) => {
+  try {
+    const { taskType, payload } = req.body;
+
+    // 1. STRICT WHITELIST
+    // Only allow specific tasks to be triggered by the frontend.
+    // 'report_usage' and 'weekly_digest' are SYSTEM ONLY and must be rejected.
+    const ALLOWED_TYPES = ['dunning_retry']; 
+    
+    if (!ALLOWED_TYPES.includes(taskType)) {
+      log(`Blocked unauthorized task type injection: ${taskType} by merchant ${req.merchant!.id}`, 'security', 'warn');
+      return res.status(400).json({ message: "Invalid or unauthorized task type" });
+    }
+
+    // 2. FORCE SERVER AUTHORITY
+    // We ignore 'status', 'runAt', and 'merchantId' from the body.
+    // We force them to safe defaults.
+    const task = await storage.createTask({
+      merchantId: req.merchant!.id, // Enforce Session Ownership
+      taskType,
+      payload: payload || {},
+      status: 'pending', // FORCE: User cannot inject 'completed' tasks
+      runAt: new Date(), // FORCE: User cannot schedule future system tasks
+    });
+
+    log(`User-initiated task created: ${taskType} for merchant ${req.merchant!.id}`, 'routes');
+    res.status(201).json(task);
+
+  } catch (error) {
+    log(`Failed to create task: ${error}`, 'routes', 'error');
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+VERIFICATION:
+
+Valid Test: Send { "taskType": "dunning_retry" }. Should return 201 Created.
+
+Attack Test 1: Send { "taskType": "report_usage" }. Should return 400 Bad Request.
+
+Attack Test 2: Send { "taskType": "dunning_retry", "status": "completed" }. Should create a task, but the status in the DB must be "pending" (ignore the injection).
