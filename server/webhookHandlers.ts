@@ -307,6 +307,17 @@ async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookRe
     };
   }
 
+  // MAP STRIPE PRICE ID TO INTERNAL PLAN KEY
+  // This prevents the "Paid but Blocked" bug.
+  // Environment variables allow flexibility between Test/Prod modes.
+  const PRICE_MAP: Record<string, string> = {
+    [process.env.STRIPE_PRICE_ID_PRO || 'price_pro_test']: 'price_pro',
+    [process.env.STRIPE_PRICE_ID_FREE || 'price_free_test']: 'price_free'
+  };
+
+  // If the price isn't in our map, default to free tier
+  const internalPlanId = PRICE_MAP[priceId] || 'price_free';
+
   try {
     // Find merchant by Platform Customer ID
     const merchant = await storage.getMerchantByStripeCustomerId(stripeCustomerId);
@@ -319,17 +330,18 @@ async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookRe
       };
     }
 
-    // If active/trialing -> Set Plan ID. Otherwise -> Free.
-    const newPlanId = (status === 'active' || status === 'trialing') ? priceId : 'price_free';
+    // If active/trialing -> Set mapped Plan ID. Otherwise -> Free.
+    const isActive = status === 'active' || status === 'trialing';
+    const finalPlanId = isActive ? internalPlanId : 'price_free';
 
     await storage.updateMerchant(merchant.id, {
-      subscriptionPlanId: newPlanId
+      subscriptionPlanId: finalPlanId
     });
 
     return { 
       processed: true, 
       action: 'processed', 
-      reason: `Plan updated to ${newPlanId} for merchant ${merchant.id}` 
+      reason: `Plan updated to ${finalPlanId} for merchant ${merchant.id}` 
     };
 
   } catch (err: any) {

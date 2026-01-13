@@ -9,6 +9,7 @@ import { checkUsageLimits, requireMerchant } from "./middleware";
 import { log } from "./index";
 import { requireAuth } from '@clerk/express';
 import { PLANS } from '@shared/plans';
+import { handleStripeWebhook } from "./webhookHandlers";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -502,6 +503,19 @@ export async function registerRoutes(
     } catch (error: any) {
       log(`Stripe disconnect error: ${error}`, 'routes', 'error');
       res.status(500).json({ message: "Failed to disconnect from Stripe" });
+    }
+  });
+
+  // STRIPE WEBHOOK LISTENER
+  // This must be publicly accessible to receive events from Stripe.
+  // Note: In production, verify req.headers['stripe-signature'] here.
+  app.post("/api/webhooks/stripe", async (req, res) => {
+    try {
+      const result = await handleStripeWebhook(req.body);
+      res.json(result);
+    } catch (err: any) {
+      log(`Webhook Error: ${err.message || err}`, 'stripe', 'error');
+      res.status(400).send(`Webhook Error: ${err.message || err}`);
     }
   });
 
