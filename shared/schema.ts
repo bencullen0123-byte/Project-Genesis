@@ -29,7 +29,9 @@ export const merchants = pgTable("merchants", {
 // 2. SCHEDULED TASKS - The Queue (State Machine)
 export const scheduledTasks = pgTable("scheduled_tasks", {
   id: serial("id").primaryKey(),
-  merchantId: text("merchant_id").notNull(),
+  merchantId: text("merchant_id")
+    .notNull()
+    .references(() => merchants.id, { onDelete: "cascade" }),
   taskType: text("task_type").notNull(),
   payload: jsonb("payload").notNull(),
   status: text("status").default("pending").notNull(),
@@ -43,7 +45,9 @@ export const scheduledTasks = pgTable("scheduled_tasks", {
 // 3. USAGE LOGS - The Ledger (Shadow Copy for UI)
 export const usageLogs = pgTable("usage_logs", {
   id: serial("id").primaryKey(),
-  merchantId: text("merchant_id").notNull(),
+  merchantId: text("merchant_id")
+    .notNull()
+    .references(() => merchants.id, { onDelete: "cascade" }),
   metricType: text("metric_type").notNull(),
   amount: integer("amount").default(1).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -61,7 +65,9 @@ export const processedEvents = pgTable("processed_events", {
 
 // 5. DAILY METRICS - Analytics (Materialized View substitute)
 export const dailyMetrics = pgTable("daily_metrics", {
-  merchantId: text("merchant_id").notNull(),
+  merchantId: text("merchant_id")
+    .notNull()
+    .references(() => merchants.id, { onDelete: "cascade" }),
   metricDate: date("metric_date").defaultNow().notNull(),
   recoveredCents: bigint("recovered_cents", { mode: "number" }).default(0).notNull(),
   emailsSent: integer("emails_sent").default(0).notNull(),
