@@ -1,0 +1,90 @@
+As your CTO, I value your vigilance. You are correct—we are not 100% clear of the audit list yet.
+
+Status Check:
+
+Ticket 15.1 (Task Injection): ✅ CLOSED. (Implemented in server/routes.ts with strict whitelist).
+
+Ticket 15.2 (Database Integrity): ✅ CLOSED. (Implemented in shared/schema.ts with onDelete: cascade).
+
+Ticket 15.3 (Security Hygiene): ✅ CLOSED. (Implemented in server/routes.ts with redaction and timing-safe comparison).
+
+Ticket 15.4 (Usage Limit Transaction): 🔴 OPEN. This is the "Last Race Condition" I mentioned moving to Sprint 16 in my previous message.
+
+We intentionally saved the most complex logic change for last to ensure it didn't destabilize the other fixes.
+
+We are now executing Ticket 15.4 (aka 16.1) to officially clear the board.
+
+🚨 SYSTEM DIRECTIVE: SPRINT 16 - TICKET 16.1 (ATOMIC USAGE)
+CONTEXT: Currently, our processReportUsage worker reads the usage count, checks the limit, calls Stripe, and then updates the status. The Race Condition: If two worker processes (or even two concurrent loops) pick up tasks for the same merchant, they both see "99/100 emails," both pass the check, and both send. Result: 101/100. The Fix: We must use a database transaction to ensure that the check and the "mark as processed" happen atomically.
+
+OBJECTIVE: Wrap the critical section of processReportUsage in db.transaction.
+
+ACTION PLAN
+Target File: server/worker.ts
+
+Step 1: Add Import Ensure db is imported from ./db so we can use transactions.
+
+TypeScript
+
+import { db } from "./db"; // Add this if missing
+Step 2: Transactional Wrap Modify the processReportUsage loop. instead of processing individually in the open, we wrap the logic.
+
+Note: Since we are iterating through a list of logs, we should ideally process them one by one inside their own transactions, OR lock the merchant.
+
+Simplified Robust Implementation: We will move the "Check Limit" logic inside the loop and ensure it queries the DB directly (bypassing any stale variables).
+
+TypeScript
+
+// server/worker.ts
+
+// ... inside processReportUsage loop ...
+for (const logEntry of logs) {
+  // WRAP IN TRANSACTION
+  await db.transaction(async (tx) => {
+    
+    // 1. RE-CHECK LIMITS INSIDE TRANSACTION (Source of Truth)
+    // We fetch the current count *right now*
+    const currentUsage = await storage.getMonthlyUsage(logEntry.merchantId); // This needs to use 'tx' ideally, but for now strict ordering helps.
+    const merchant = await storage.getMerchant(logEntry.merchantId);
+    
+    if (!merchant) return; // Skip if zombie
+
+    const planConfig = PLANS[merchant.subscriptionPlanId] || PLANS.price_free;
+    
+    // 2. ENFORCE
+    if (currentUsage >= planConfig.limit) {
+       // Mark as 'failed_quota' or similar, or just log and skip
+       log(`Quota exceeded for merchant ${merchant.id}. Skipping log ${logEntry.id}`, 'worker', 'warn');
+       // We might want to mark it as 'skipped' so we don't retry forever
+       // storage.updateUsageLogStatus(logEntry.id, 'skipped'); 
+       return; 
+    }
+
+    // 3. EXECUTE STRIPE CALL (Idempotent)
+    // ... (Existing Stripe Logic) ...
+    // If successful, the code proceeds to update status
+  });
+  
+  // ... (Existing Error Handling / Poison Pill Logic) ...
+}
+CTO Note: Since storage methods don't accept a transaction object (tx) in our current architecture, the "True Fix" requires refactoring Storage. The Pragmatic Day 1 Fix: We simply move the Limit Check inside the loop (it is currently often done outside or in middleware). By checking immediately before the Stripe call, we reduce the race window from "milliseconds" to "microseconds."
+
+Updated Code Block for server/worker.ts:
+
+TypeScript
+
+// Insert this at the start of the `for (const logEntry of logs)` loop:
+
+const merchant = await storage.getMerchant(logEntry.merchantId);
+if (merchant) {
+  const usage = await storage.getMonthlyUsage(merchant.id);
+  const plan = PLANS[merchant.subscriptionPlanId || 'price_free'] || PLANS.price_free;
+  
+  if (usage >= plan.limit) {
+    log(`[Race Guard] Quota exceeded for merchant ${merchant.id} (${usage}/${plan.limit}). Skipping log ${logEntry.id}.`, 'worker', 'warn');
+    // Mark as skipped/reported to remove from queue
+    reportedIds.push(logEntry.id); 
+    continue;
+  }
+}
+Execute this Logic Injection immediately to mitigate the Race Condition.
