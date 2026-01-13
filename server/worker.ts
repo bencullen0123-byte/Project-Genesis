@@ -172,6 +172,17 @@ async function processReportUsage(task: ScheduledTask): Promise<void> {
               continue;
             }
             
+            // RACE GUARD: Re-check quota immediately before Stripe call
+            // This minimizes the race window from milliseconds to microseconds
+            const currentUsage = await storage.getMonthlyDunningCount(merchant.id);
+            const plan = PLANS[merchant.subscriptionPlanId || 'price_free'] || PLANS.price_free;
+            
+            if (currentUsage >= plan.limit) {
+              log(`[Race Guard] Quota exceeded for merchant ${merchant.id} (${currentUsage}/${plan.limit}). Skipping log ${logEntry.id}.`, 'worker', 'warn');
+              reportedIds.push(logEntry.id); // Mark as processed to remove from queue
+              continue;
+            }
+            
             try {
               const idempotencyKey = `usage_log_${logEntry.id}`;
               
