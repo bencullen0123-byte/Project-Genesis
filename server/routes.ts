@@ -91,7 +91,7 @@ export async function registerRoutes(
     }
   });
 
-  // SECURE: Create Task (Protected & Scoped)
+  // SECURED: Create Task (User Initiated - Whitelist Enforced)
   app.post(
     "/api/tasks",
     requireAuth(),      // 1. Authenticate
@@ -99,22 +99,35 @@ export async function registerRoutes(
     checkUsageLimits,   // 3. Enforce Quotas
     async (req, res) => {
       try {
-        // Parse body but IGNORE the merchantId provided by the client
-        const body = insertScheduledTaskSchema.parse(req.body);
+        const { taskType, payload } = req.body;
 
-        // 4. Force Merchant ID from Session (The Fix)
+        // 1. STRICT WHITELIST
+        // Only allow specific tasks to be triggered by the frontend.
+        // 'report_usage' and 'weekly_digest' are SYSTEM ONLY and must be rejected.
+        const ALLOWED_TYPES = ['dunning_retry', 'notify_action_required'];
+        
+        if (!ALLOWED_TYPES.includes(taskType)) {
+          log(`Blocked unauthorized task type injection: ${taskType} by merchant ${req.merchant!.id}`, 'security', 'warn');
+          return res.status(400).json({ message: "Invalid or unauthorized task type" });
+        }
+
+        // 2. FORCE SERVER AUTHORITY
+        // We ignore 'status', 'runAt', and 'merchantId' from the body.
+        // We force them to safe defaults.
         const task = await storage.createTask({
-          ...body,
-          merchantId: req.merchant!.id // <--- CRITICAL SECURITY OVERRIDE
+          merchantId: req.merchant!.id, // Enforce Session Ownership
+          taskType,
+          payload: payload || {},
+          status: 'pending', // FORCE: User cannot inject 'completed' tasks
+          runAt: new Date(), // FORCE: User cannot schedule future system tasks
         });
 
+        log(`User-initiated task created: ${taskType} for merchant ${req.merchant!.id}`, 'routes');
         res.status(201).json(task);
+
       } catch (error) {
-        if (error instanceof z.ZodError) {
-          return res.status(400).json({ error: "Invalid task data", details: error.errors });
-        }
-        log(`Create task error: ${error}`, 'routes', 'error');
-        res.status(500).json({ error: "Failed to create task" });
+        log(`Failed to create task: ${error}`, 'routes', 'error');
+        res.status(500).json({ message: "Internal server error" });
       }
     }
   );
