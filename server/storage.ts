@@ -55,6 +55,7 @@ export interface IStorage {
   getTask(id: number): Promise<ScheduledTask | undefined>;
   getTasks(merchantId: string, status?: string): Promise<ScheduledTask[]>;
   getRecentTasks(merchantId: string, limit?: number): Promise<ScheduledTask[]>;
+  getPendingTasksCount(merchantId: string): Promise<number>;
   createTask(task: InsertScheduledTask): Promise<ScheduledTask>;
   updateTaskStatus(id: number, status: string): Promise<ScheduledTask | undefined>;
   claimNextTask(): Promise<ScheduledTask | undefined>;
@@ -183,6 +184,16 @@ export class DatabaseStorage implements IStorage {
       .where(eq(scheduledTasks.merchantId, merchantId))
       .orderBy(desc(scheduledTasks.createdAt))
       .limit(limit);
+  }
+
+  async getPendingTasksCount(merchantId: string): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(scheduledTasks)
+      .where(and(
+        eq(scheduledTasks.merchantId, merchantId),
+        eq(scheduledTasks.status, TaskStatus.PENDING)
+      ));
+    return result?.count || 0;
   }
 
   async createTask(task: InsertScheduledTask): Promise<ScheduledTask> {

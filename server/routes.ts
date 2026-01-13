@@ -111,7 +111,19 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Invalid or unauthorized task type" });
         }
 
-        // 2. FORCE SERVER AUTHORITY
+        // 2. QUEUE FLOOD PREVENTION
+        // Cap the number of pending tasks to prevent DoS via task spam
+        const MAX_PENDING_QUEUE = 50;
+        const pendingCount = await storage.getPendingTasksCount(req.merchant!.id);
+        
+        if (pendingCount >= MAX_PENDING_QUEUE) {
+          log(`Queue limit reached for merchant ${req.merchant!.id} (${pendingCount}/${MAX_PENDING_QUEUE})`, 'security', 'warn');
+          return res.status(429).json({ 
+            message: "Queue limit reached. Please wait for your pending tasks to complete." 
+          });
+        }
+
+        // 3. FORCE SERVER AUTHORITY
         // We ignore 'status', 'runAt', and 'merchantId' from the body.
         // We force them to safe defaults.
         const task = await storage.createTask({
@@ -249,15 +261,20 @@ export async function registerRoutes(
     }
   });
 
-  // Worker authentication middleware
+  // Worker authentication middleware (timing-safe comparison)
   const requireWorkerAuth = (req: any, res: any, next: any) => {
-    const secret = process.env.WORKER_SECRET;
-    if (!secret) {
+    const expectedSecret = process.env.WORKER_SECRET;
+    if (!expectedSecret) {
       log("Worker secret not configured", "security", "error");
       return res.status(500).json({ error: "Server configuration error" });
     }
     
-    if (req.headers['x-worker-secret'] !== secret) {
+    const providedSecret = req.headers['x-worker-secret'] || '';
+    const providedBuffer = Buffer.from(String(providedSecret));
+    const expectedBuffer = Buffer.from(expectedSecret);
+    
+    if (providedBuffer.length !== expectedBuffer.length || 
+        !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
       log(`Unauthorized worker access attempt from ${req.ip}`, "security", "warn");
       return res.status(403).json({ error: "Forbidden" });
     }
