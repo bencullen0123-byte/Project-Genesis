@@ -1,0 +1,62 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 20 - TICKET 20.2 (WEBHOOK SECURITY)
+CONTEXT: The /api/webhooks/stripe route currently accepts any JSON payload. This is a critical vulnerability (ID: "The Webhook Fortress"). We must verify the stripe-signature header using the raw request body.
+
+OBJECTIVE: Secure the webhook endpoint in server/routes.ts using stripe.webhooks.constructEvent.
+
+ACTION PLAN
+Target File: server/routes.ts
+
+1. Add Imports Ensure you have the Stripe library imported to access the static webhook methods.
+
+TypeScript
+
+import Stripe from "stripe"; // Ensure this is present
+2. Secure the Route Locate app.post("/api/webhooks/stripe", ...) and replace the body with this verification logic.
+
+TypeScript
+
+  // server/routes.ts
+
+  app.post("/api/webhooks/stripe", async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    // 1. FAIL SAFE: Configuration Check
+    if (!secret || !signature) {
+      log("Webhook failed: Missing secret or signature", "stripe", "error");
+      return res.status(400).send("Webhook Error: Missing configuration");
+    }
+
+    let event: Stripe.Event;
+
+    try {
+      // 2. CRYPTOGRAPHIC VERIFICATION
+      // We use the raw buffer (captured in server/index.ts) + the header + the secret
+      // If this fails, it throws an error immediately.
+      event = Stripe.webhooks.constructEvent(
+        (req as any).rawBody, 
+        signature as string, 
+        secret
+      );
+    } catch (err: any) {
+      log(`Webhook signature verification failed: ${err.message}`, "stripe", "error");
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    try {
+      // 3. PROCESS VALIDATED EVENT
+      // We pass the verified 'event' object, NOT 'req.body' (which is unverified JSON)
+      const result = await handleStripeWebhook(event);
+      res.json(result);
+    } catch (err: any) {
+      log(`Webhook processing error: ${err.message}`, "stripe", "error");
+      // Return 200 to Stripe even on logic error to prevent retries if it's a bug? 
+      // Usually return 400 if we want retry, but for now 400 is fine.
+      res.status(400).send(`Webhook Handler Error: ${err.message}`);
+    }
+  });
+VERIFICATION:
+
+Positive Test: A real event from Stripe (using stripe trigger or dashboard) should return 200 OK.
+
+Negative Test: A curl request with fake JSON and no signature header must return 400 Webhook Error: Missing configuration.
