@@ -11,6 +11,7 @@ import { log } from "./index";
 import { requireAuth } from '@clerk/express';
 import { PLANS } from '@shared/plans';
 import { handleStripeWebhook } from "./webhookHandlers";
+import DOMPurify from 'isomorphic-dompurify';
 
 export async function registerRoutes(
   httpServer: Server,
@@ -223,11 +224,37 @@ export async function registerRoutes(
       }
 
       // SECURITY: Email removed from allowed fields to prevent spoofing
-      const { billingCountry, billingAddress } = req.body;
+      const { 
+        billingCountry, 
+        billingAddress, 
+        brandColor, 
+        logoUrl, 
+        fromName, 
+        supportEmail 
+      } = req.body;
 
       const updateData: Record<string, string | null> = {};
       if (billingCountry !== undefined) updateData.billingCountry = billingCountry;
       if (billingAddress !== undefined) updateData.billingAddress = billingAddress;
+      if (fromName !== undefined) updateData.fromName = fromName;
+      if (supportEmail !== undefined) updateData.supportEmail = supportEmail;
+
+      // 1. HEX COLOR VALIDATION
+      if (brandColor !== undefined) {
+        const hexRegex = /^#[0-9A-Fa-f]{6}$/;
+        if (!hexRegex.test(brandColor)) {
+          return res.status(400).json({ message: "Invalid hex color format (e.g. #FF0000)" });
+        }
+        updateData.brandColor = brandColor;
+      }
+
+      // 2. LOGO URL PROTOCOL CHECK
+      if (logoUrl !== undefined) {
+        if (logoUrl && !logoUrl.startsWith('https://')) {
+          return res.status(400).json({ message: "Logo URL must use secure HTTPS protocol" });
+        }
+        updateData.logoUrl = logoUrl;
+      }
 
       if (Object.keys(updateData).length === 0) {
         return res.status(400).json({ message: "No valid fields to update" });
@@ -245,6 +272,10 @@ export async function registerRoutes(
         email: updated.email,
         billingCountry: updated.billingCountry,
         billingAddress: updated.billingAddress,
+        brandColor: updated.brandColor,
+        logoUrl: updated.logoUrl,
+        fromName: updated.fromName,
+        supportEmail: updated.supportEmail,
         tier: updated.tier,
         stripeConnectId: updated.stripeConnectId,
       });
@@ -252,6 +283,36 @@ export async function registerRoutes(
       const errorMessage = error instanceof Error ? error.message : String(error);
       log(`Update merchant error: ${errorMessage}`, 'routes', 'error');
       res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // EMAIL TEMPLATE MANAGEMENT (SECURED)
+  app.post("/api/email-templates", requireAuth(), requireMerchant, async (req, res) => {
+    try {
+      const { retryAttempt, subject, body } = req.body;
+
+      if (![1, 2, 3].includes(retryAttempt)) {
+        return res.status(400).json({ message: "Invalid retry attempt (must be 1, 2, or 3)" });
+      }
+
+      if (!subject || !body) {
+        return res.status(400).json({ message: "Subject and body are required" });
+      }
+
+      // SECURITY: DOM SANITIZATION
+      // Strips <script>, <onmouseover>, etc., while keeping safe layout tags
+      const sanitizedBody = DOMPurify.sanitize(body);
+
+      const template = await storage.createOrUpdateEmailTemplate(req.merchant!.id, {
+        retryAttempt,
+        subject: subject.substring(0, 200), // Subject length limit
+        body: sanitizedBody
+      });
+
+      res.status(201).json(template);
+    } catch (error) {
+      log(`Template update error: ${error}`, 'routes', 'error');
+      res.status(500).json({ message: "Failed to save template" });
     }
   });
 

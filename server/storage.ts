@@ -4,6 +4,7 @@ import {
   usageLogs, 
   processedEvents, 
   dailyMetrics,
+  emailTemplates,
   type Merchant, 
   type InsertMerchant,
   type ScheduledTask,
@@ -14,6 +15,8 @@ import {
   type InsertProcessedEvent,
   type DailyMetric,
   type InsertDailyMetric,
+  type EmailTemplate,
+  type InsertEmailTemplate,
   TaskStatus,
 } from "@shared/schema";
 import { db, pool } from "./db";
@@ -96,6 +99,10 @@ export interface IStorage {
   
   // Weekly Digest Tasks
   hasWeeklyDigestTask(merchantId: string): Promise<boolean>;
+
+  // Email Templates
+  createOrUpdateEmailTemplate(merchantId: string, data: { retryAttempt: number; subject: string; body: string }): Promise<EmailTemplate>;
+  getEmailTemplate(merchantId: string, retryAttempt: number): Promise<EmailTemplate | undefined>;
 
   // Dashboard Stats
   getDashboardStats(merchantId: string): Promise<{
@@ -515,6 +522,44 @@ export class DatabaseStorage implements IStorage {
       ))
       .limit(1);
     return !!existing;
+  }
+
+  // Email Templates (Upsert by merchantId + retryAttempt)
+  async createOrUpdateEmailTemplate(
+    merchantId: string, 
+    data: { retryAttempt: number; subject: string; body: string }
+  ): Promise<EmailTemplate> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`
+        INSERT INTO email_templates (merchant_id, retry_attempt, subject, body)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (merchant_id, retry_attempt)
+        DO UPDATE SET subject = EXCLUDED.subject, body = EXCLUDED.body
+        RETURNING *
+      `, [merchantId, data.retryAttempt, data.subject, data.body]);
+      
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        merchantId: row.merchant_id,
+        retryAttempt: row.retry_attempt,
+        subject: row.subject,
+        body: row.body,
+        createdAt: row.created_at,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async getEmailTemplate(merchantId: string, retryAttempt: number): Promise<EmailTemplate | undefined> {
+    const [template] = await db.select().from(emailTemplates)
+      .where(and(
+        eq(emailTemplates.merchantId, merchantId),
+        eq(emailTemplates.retryAttempt, retryAttempt)
+      ));
+    return template;
   }
 
   // Dashboard Stats (Tenant-Scoped)
