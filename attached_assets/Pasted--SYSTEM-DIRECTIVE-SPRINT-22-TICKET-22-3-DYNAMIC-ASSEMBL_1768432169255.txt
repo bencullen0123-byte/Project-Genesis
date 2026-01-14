@@ -1,0 +1,92 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 22 - TICKET 22.3 (DYNAMIC ASSEMBLER)
+CONTEXT: We have secured branding and template data in the DB. Now we must update the worker to use this data to send professional, branded, and sequenced emails.
+
+OBJECTIVE: Rewrite server/email.ts to be a dynamic assembler and update server/worker.ts to pass the failure history.
+
+ACTION PLAN
+Target File: server/email.ts
+
+Step 1: Build the whitelisted Token Replacer Create a helper function to safely swap tokens.
+
+TypeScript
+
+// server/email.ts
+
+function replaceTokens(text: string, tokens: Record<string, string>): string {
+  return text.replace(/\{\{(customer_name|amount|update_url)\}\}/g, (match, key) => {
+    return tokens[key] || match;
+  });
+}
+Step 2: Update sendDunningEmail to use DB data The function should now accept the merchant object and the attempt count.
+
+TypeScript
+
+// server/email.ts
+
+export async function sendDunningEmail(
+  to: string,
+  amount: string,
+  updateUrl: string,
+  merchant: any, // Pass the full merchant record for branding
+  attemptCount: number = 1,
+  customTemplate?: { subject: string; body: string } // Optional custom template
+) {
+  // 1. SELECT CONTENT (Custom or Default)
+  const defaultSubject = `Action Required: Payment of ${amount} Failed`;
+  const defaultBody = `We were unable to process your payment of ${amount}. Please update your details.`;
+  
+  let subject = customTemplate?.subject || defaultSubject;
+  let body = customTemplate?.body || defaultBody;
+
+  // 2. APPLY TOKENS
+  const tokens = {
+    customer_name: "Customer", // We will expand this when we capture names
+    amount: amount,
+    update_url: updateUrl
+  };
+
+  subject = replaceTokens(subject, tokens);
+  const bodyHtml = replaceTokens(body, tokens);
+
+  // 3. ASSEMBLE BRANDED SHELL
+  const html = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: auto; border-top: 4px solid ${merchant.brandColor}; padding: 20px;">
+      ${merchant.logoUrl ? `<img src="${merchant.logoUrl}" style="max-height: 50px; margin-bottom: 20px;">` : ''}
+      <h2 style="color: #333;">${subject}</h2>
+      <div style="line-height: 1.6; color: #444;">${bodyHtml}</div>
+      <div style="margin: 30px 0;">
+        <a href="${updateUrl}" style="background-color: ${merchant.brandColor}; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Update Payment Method</a>
+      </div>
+      <p style="font-size: 12px; color: #999;">Sent by ${merchant.fromName || merchant.email} via Project Genesis</p>
+    </div>
+  `;
+
+  // ... use existing mailer logic (SendGrid/SMTP) to send the HTML ...
+}
+Target File: server/worker.ts
+
+Step 3: Fetch Template and Execute Update the worker to fetch the template before calling the email function.
+
+TypeScript
+
+// server/worker.ts (Inside dunning_retry task)
+
+    // 1. Fetch failure-specific template
+    const template = await storage.getEmailTemplate(merchant.id, payload.attemptCount);
+
+    // 2. Execute with branding and attempt count
+    await sendDunningEmail(
+      customerEmail,
+      formattedAmount,
+      payload.hostedInvoiceUrl,
+      merchant, // Pass branding identity
+      payload.attemptCount,
+      template || undefined // Pass custom content if it exists
+    );
+VERIFICATION:
+
+Identity Test: If a merchant has brand_color: "#FF0000", the email button and top border should be red.
+
+Sequence Test: If a merchant defines a custom "Attempt 2" template, the worker must send that specific text for the second failure.
+
+Fallback Test: If no template is defined, the engine must send the professional defaults.
