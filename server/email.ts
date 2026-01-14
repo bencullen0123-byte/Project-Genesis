@@ -79,6 +79,8 @@ export interface DunningEmailData {
 export interface WeeklyDigestData {
   totalRecoveredCents: number;
   totalEmailsSent: number;
+  totalOpens: number;
+  totalClicks: number;
   merchantId: string;
 }
 
@@ -307,6 +309,14 @@ export async function sendWeeklyDigest(
 ): Promise<boolean> {
   const recoveredDollars = (data.totalRecoveredCents / 100).toFixed(2);
   
+  // Calculate engagement metrics (Ticket 23.4)
+  const openRate = data.totalEmailsSent > 0 
+    ? ((data.totalOpens / data.totalEmailsSent) * 100).toFixed(1) 
+    : '0.0';
+  const ctr = data.totalOpens > 0 
+    ? ((data.totalClicks / data.totalOpens) * 100).toFixed(1) 
+    : '0.0';
+  
   const subject = `Weekly Report: $${recoveredDollars} Recovered`;
   
   const htmlBody = `
@@ -314,32 +324,56 @@ export async function sendWeeklyDigest(
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Weekly Report</title>
+  <title>Weekly Retention Report</title>
 </head>
 <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h1 style="color: #333;">Weekly Report</h1>
+  <h2 style="color: #333; margin-bottom: 20px;">Weekly Retention Report</h2>
   
-  <p>We recovered <strong>$${recoveredDollars}</strong> for you this week.</p>
-  
-  <p>${data.totalEmailsSent} emails were sent to retain your customers.</p>
-  
+  <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+    <h3 style="margin-top: 0; color: #333;">Recovery Impact</h3>
+    <p style="font-size: 28px; font-weight: bold; color: #10b981; margin: 10px 0;">
+      $${recoveredDollars} Recovered
+    </p>
+    <p style="color: #666; margin: 0;">${data.totalEmailsSent} recovery emails sent</p>
+  </div>
+
+  <h3 style="color: #333; margin-top: 30px;">Engagement Funnel</h3>
+  <table style="width: 100%; border-collapse: collapse;">
+    <tr>
+      <td style="border: 1px solid #eee; padding: 15px; text-align: center; width: 50%;">
+        <p style="color: #666; margin: 0 0 5px 0; font-size: 14px;">Open Rate</p>
+        <p style="font-size: 24px; font-weight: bold; margin: 0; color: #333;">${openRate}%</p>
+        <p style="color: #999; margin: 5px 0 0 0; font-size: 12px;">${data.totalOpens} opens</p>
+      </td>
+      <td style="border: 1px solid #eee; padding: 15px; text-align: center; width: 50%;">
+        <p style="color: #666; margin: 0 0 5px 0; font-size: 14px;">Click-Through Rate</p>
+        <p style="font-size: 24px; font-weight: bold; margin: 0; color: #333;">${ctr}%</p>
+        <p style="color: #999; margin: 5px 0 0 0; font-size: 12px;">${data.totalClicks} clicks</p>
+      </td>
+    </tr>
+  </table>
+
   <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
   
   <p style="color: #999; font-size: 12px;">
-    This is your weekly payment recovery summary.
+    This report summarizes your dunning performance over the last 7 days.
   </p>
 </body>
 </html>
   `.trim();
 
   const textBody = `
-Weekly Report
+Weekly Retention Report
 
-We recovered $${recoveredDollars} for you this week.
+RECOVERY IMPACT
+$${recoveredDollars} Recovered
+${data.totalEmailsSent} recovery emails sent
 
-${data.totalEmailsSent} emails were sent to retain your customers.
+ENGAGEMENT FUNNEL
+Open Rate: ${openRate}% (${data.totalOpens} opens)
+Click-Through Rate: ${ctr}% (${data.totalClicks} clicks)
 
-This is your weekly payment recovery summary.
+This report summarizes your dunning performance over the last 7 days.
   `.trim();
 
   const resend = await getResendClient();

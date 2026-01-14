@@ -283,6 +283,8 @@ async function processWeeklyDigest(task: ScheduledTask): Promise<void> {
     const emailSent = await sendWeeklyDigest(merchant.email, {
       totalRecoveredCents: weeklyMetrics.totalRecoveredCents,
       totalEmailsSent: weeklyMetrics.totalEmailsSent,
+      totalOpens: weeklyMetrics.totalOpens,
+      totalClicks: weeklyMetrics.totalClicks,
       merchantId: task.merchantId,
     });
     

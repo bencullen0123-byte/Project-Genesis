@@ -496,10 +496,14 @@ export class DatabaseStorage implements IStorage {
   async getWeeklyMetrics(merchantId: string): Promise<{
     totalRecoveredCents: number;
     totalEmailsSent: number;
+    totalOpens: number;
+    totalClicks: number;
   }> {
     const [result] = await db.select({
       totalRecoveredCents: sql<number>`COALESCE(SUM(recovered_cents), 0)::bigint`,
       totalEmailsSent: sql<number>`COALESCE(SUM(emails_sent), 0)::int`,
+      totalOpens: sql<number>`COALESCE(SUM(total_opens), 0)::int`,
+      totalClicks: sql<number>`COALESCE(SUM(total_clicks), 0)::int`,
     })
     .from(dailyMetrics)
     .where(and(
@@ -510,6 +514,8 @@ export class DatabaseStorage implements IStorage {
     return {
       totalRecoveredCents: Number(result?.totalRecoveredCents || 0),
       totalEmailsSent: result?.totalEmailsSent || 0,
+      totalOpens: result?.totalOpens || 0,
+      totalClicks: result?.totalClicks || 0,
     };
   }
 
