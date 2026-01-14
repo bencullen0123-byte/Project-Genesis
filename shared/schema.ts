@@ -54,6 +54,11 @@ export const usageLogs = pgTable("usage_logs", {
     .references(() => merchants.id, { onDelete: "cascade" }),
   metricType: text("metric_type").notNull(),
   amount: integer("amount").default(1).notNull(),
+  
+  // TRACKING TIMESTAMPS (Ticket 23.1 - Funnel Analytics)
+  openedAt: timestamp("opened_at"),
+  clickedAt: timestamp("clicked_at"),
+  
   createdAt: timestamp("created_at").defaultNow().notNull(),
   reportedAt: timestamp("reported_at"),
 }, (table) => [
@@ -75,6 +80,10 @@ export const dailyMetrics = pgTable("daily_metrics", {
   metricDate: date("metric_date").defaultNow().notNull(),
   recoveredCents: bigint("recovered_cents", { mode: "number" }).default(0).notNull(),
   emailsSent: integer("emails_sent").default(0).notNull(),
+  
+  // ANALYTICS COUNTERS (Ticket 23.1 - Funnel Analytics)
+  totalOpens: integer("total_opens").default(0).notNull(),
+  totalClicks: integer("total_clicks").default(0).notNull(),
 }, (table) => [
   primaryKey({ columns: [table.merchantId, table.metricDate] }),
 ]);
