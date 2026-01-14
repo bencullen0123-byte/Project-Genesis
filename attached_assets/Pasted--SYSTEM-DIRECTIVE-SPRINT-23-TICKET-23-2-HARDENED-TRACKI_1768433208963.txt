@@ -1,0 +1,92 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 23 - TICKET 23.2 (HARDENED TRACKING LOGIC)
+CONTEXT: We have the database columns. Now we need the routes to populate them. We must use HMAC signatures to ensure tracking links cannot be manipulated by attackers.
+
+OBJECTIVE: Implement the Open Pixel and the Signed Click Redirector in server/routes.ts.
+
+ACTION PLAN
+Target File: server/routes.ts
+
+Step 1: HMAC Utility Add a utility to generate and verify signatures (ensure you have a SESSION_SECRET or similar in your .env).
+
+TypeScript
+
+import crypto from 'crypto';
+
+const APP_SECRET = process.env.SESSION_SECRET || 'dev-secret-do-not-use-in-prod';
+
+function generateSignature(url: string, logId: string): string {
+  return crypto.createHmac('sha256', APP_SECRET)
+    .update(`${url}:${logId}`)
+    .digest('hex');
+}
+Step 2: Implement the Pixel Handler Add this to your registerRoutes function.
+
+TypeScript
+
+// server/routes.ts
+
+app.get("/api/track/open/:logId", async (req, res) => {
+  const logId = parseInt(req.params.logId);
+  
+  try {
+    // 1. Log the interaction and increment metrics (Atomic update)
+    await storage.recordEmailOpen(logId);
+    
+    // 2. Serve a 1x1 transparent GIF
+    const pixel = Buffer.from(
+      "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", 
+      "base64"
+    );
+    res.set({
+      "Content-Type": "image/gif",
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    });
+    res.send(pixel);
+  } catch (error) {
+    // Fail silently to the user, but log for us
+    console.error(`Pixel tracking error for log ${logId}:`, error);
+    res.status(200).send(); // Always return 200 for pixels
+  }
+});
+Step 3: Implement the Signed Redirector Add the redirect handler with signature verification.
+
+TypeScript
+
+// server/routes.ts
+
+app.get("/api/track/click", async (req, res) => {
+  const { url, logId, sig } = req.query as { url: string; logId: string; sig: string };
+
+  if (!url || !logId || !sig) {
+    return res.status(400).send("Missing tracking parameters");
+  }
+
+  // SECURITY: Verify the HMAC signature
+  const expectedSig = generateSignature(url, logId);
+  if (sig !== expectedSig) {
+    console.error(`Invalid tracking signature detected for log ${logId}`);
+    return res.status(403).send("Invalid tracking signature");
+  }
+
+  try {
+    // 1. Log the click and increment metrics
+    await storage.recordEmailClick(parseInt(logId));
+    
+    // 2. Redirect to destination
+    res.redirect(url);
+  } catch (error) {
+    console.error(`Link tracking error for log ${logId}:`, error);
+    res.redirect(url); // Redirect anyway so user isn't stuck
+  }
+});
+Target File: server/storage.ts Implement recordEmailOpen(logId) and recordEmailClick(logId) using Atomic Increments in the daily_metrics table to handle high concurrency.
+
+VERIFICATION:
+
+Pixel Test: Accessing /api/track/open/1 should return a tiny image and update the DB.
+
+Security Test: Try to access /api/track/click?url=https://google.com&logId=1&sig=FAKE. It should return a 403 Forbidden.
+
+Integrity Test: Ensure that daily_metrics.total_opens increments every time the pixel is hit.
