@@ -1,0 +1,103 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 21 (ELASTIC SCALING)
+CONTEXT: Currently, all users are capped at 50 concurrent pending tasks. We need to introduce a "Growth" tier and enforce dynamic queue limits based on the plan (Hobby/Growth/Pro).
+
+OBJECTIVES:
+
+Schema: Update plan definitions with queueLimit (Ticket 21.1).
+
+Billing: Map the new "Growth" plan in the webhook handler (Ticket 21.2).
+
+Enforcement: Enforce these limits in the API and provide upsell messaging (Ticket 21.3 & 21.4).
+
+ACTION PLAN
+Target File 1: shared/plans.ts (Ticket 21.1)
+
+Goal: Define the tiers and their specific limits.
+
+TypeScript
+
+// shared/plans.ts
+
+export interface PlanConfig {
+  name: string;
+  limit: number;
+  queueLimit: number; // New concurrency control
+}
+
+export const PLANS: Record<string, PlanConfig> = {
+  'price_free': { 
+    name: 'Hobby', 
+    limit: 20,       // Strict limit for free tier
+    queueLimit: 5    // Low concurrency to prevent abuse
+  },
+  'price_growth': {  // NEW TIER
+    name: 'Growth', 
+    limit: 1000, 
+    queueLimit: 100 
+  },
+  'price_pro': { 
+    name: 'Pro', 
+    limit: 10000, 
+    queueLimit: 1000 // High concurrency for power users
+  },
+  'default': { 
+    name: 'Basic', 
+    limit: 20, 
+    queueLimit: 5 
+  }
+};
+Target File 2: server/webhookHandlers.ts (Ticket 21.2)
+
+Goal: Recognize the new price_growth tier when Stripe sends an event.
+
+TypeScript
+
+// server/webhookHandlers.ts
+
+// ... inside handleSubscriptionUpdated ...
+
+  // MAP STRIPE PRICE ID TO INTERNAL PLAN KEY
+  const PRICE_MAP: Record<string, string> = {
+    [process.env.STRIPE_PRICE_ID_PRO || 'price_pro_test']: 'price_pro',
+    [process.env.STRIPE_PRICE_ID_GROWTH || 'price_growth_test']: 'price_growth', // Ticket 21.2
+    [process.env.STRIPE_PRICE_ID_FREE || 'price_free_test']: 'price_free'
+  };
+
+// ...
+Target File 3: server/routes.ts (Ticket 21.3 & 21.4)
+
+Goal: Enforce the limit dynamically and tell the user why they were blocked.
+
+TypeScript
+
+// server/routes.ts
+
+// ... inside POST /api/tasks ...
+
+        // 2. QUEUE FLOOD PREVENTION (Dynamic)
+        // Check how many tasks are currently pending for this merchant
+        const pendingCount = await storage.getPendingTasksCount(req.merchant!.id);
+        
+        // Lookup Plan Limits
+        const planKey = req.merchant!.subscriptionPlanId || 'default';
+        const planConfig = PLANS[planKey] || PLANS['default'];
+        const maxQueue = planConfig.queueLimit;
+        
+        // Ticket 21.3: Dynamic Check
+        if (pendingCount >= maxQueue) {
+          log(`Queue limit reached for merchant ${req.merchant!.id} (${pendingCount}/${maxQueue})`, 'security', 'warn');
+          
+          // Ticket 21.4: Upsell Messaging
+          return res.status(429).json({ 
+            message: `Queue limit reached (${pendingCount}/${maxQueue}). Upgrade your plan to increase concurrency.` 
+          });
+        }
+
+// ...
+VERIFICATION:
+
+Hobby Test: A user on price_free should be blocked after creating 6 pending tasks.
+
+Growth Test: A user on price_growth should be able to create 100 pending tasks.
+
+Pro Test: A user on price_pro should be able to create 1000 pending tasks.
