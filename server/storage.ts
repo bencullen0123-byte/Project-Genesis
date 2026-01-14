@@ -356,6 +356,8 @@ export class DatabaseStorage implements IStorage {
         metricType: created.metric_type,
         amount: created.amount,
         createdAt: created.created_at,
+        openedAt: created.opened_at,
+        clickedAt: created.clicked_at,
         reportedAt: created.reported_at,
       };
     } catch (error) {
@@ -460,6 +462,8 @@ export class DatabaseStorage implements IStorage {
         metricDate: row.metric_date,
         recoveredCents: Number(row.recovered_cents),
         emailsSent: row.emails_sent,
+        totalOpens: row.total_opens || 0,
+        totalClicks: row.total_clicks || 0,
       };
     } finally {
       client.release();
