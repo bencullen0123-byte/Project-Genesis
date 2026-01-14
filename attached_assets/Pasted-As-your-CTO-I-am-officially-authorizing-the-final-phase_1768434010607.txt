@@ -1,0 +1,97 @@
+As your CTO, I am officially authorizing the final phase of Sprint 23: Retention Intelligence.
+
+We have built the database, secured the tracking links, and updated the dashboard. Now, we must close the loop by ensuring that merchants receive these high-value insights directly in their inboxes. This transforms the platform from a "dashboard you have to check" into a "proactive ROI reporting engine."
+
+🚀 SPRINT 23: TICKET 23.4 (THE WEEKLY RETENTION DIGEST)
+Goal: Enhance the automated weekly report to showcase the retention funnel (Opens and Clicks) and calculate a "Recovery Effectiveness" score.
+
+Technical Directive:
+
+Metric Expansion: Update the getWeeklyStats method in server/storage.ts to include the sums of total_opens and total_clicks for the past 7 days.
+
+Calculated ROI: Calculate the Conversion Rate (Total Recovered / Total Sent) to show exactly how effective the dunning sequence is.
+
+Template Update: Modify the WeeklyDigest template in server/email.ts to include a new "Engagement Funnel" section.
+
+🚀 REPLIT BRIEF: SPRINT 23 - TICKET 23.4
+Copy and paste this directive into Replit.
+
+🚨 SYSTEM DIRECTIVE: SPRINT 23 - TICKET 23.4 (RETENTION DIGEST)
+CONTEXT: The platform now tracks email engagement. We must update our weekly automated report to include these metrics so merchants see the concrete value we provide without needing to log in.
+
+OBJECTIVE: Update the weekly stats logic and email template to include Open Rate, CTR, and Recovery Effectiveness.
+
+ACTION PLAN
+Target File: server/storage.ts
+
+Step 1: Update getWeeklyStats Ensure the query aggregates the new tracking columns.
+
+TypeScript
+
+// server/storage.ts
+
+async getWeeklyStats(merchantId: string) {
+  const sevenDaysAgo = subDays(new Date(), 7);
+  
+  const stats = await db.select({
+    totalRecovered: sql<number>`sum(${dailyMetrics.recoveredCents})`,
+    totalSent: sql<number>`sum(${dailyMetrics.emailsSent})`,
+    totalOpens: sql<number>`sum(${dailyMetrics.totalOpens})`, // New
+    totalClicks: sql<number>`sum(${dailyMetrics.totalClicks})`, // New
+  })
+  .from(dailyMetrics)
+  .where(
+    and(
+      eq(dailyMetrics.merchantId, merchantId),
+      gte(dailyMetrics.metricDate, sevenDaysAgo)
+    )
+  );
+
+  return stats[0];
+}
+Target File: server/email.ts
+
+Step 2: Update Weekly Template Inject the retention funnel into the report.
+
+TypeScript
+
+// server/email.ts (Inside sendWeeklyDigest)
+
+export async function sendWeeklyDigest(to: string, stats: any, merchantName: string) {
+  const openRate = stats.totalSent > 0 ? (stats.totalOpens / stats.totalSent) * 100 : 0;
+  const ctr = stats.totalOpens > 0 ? (stats.totalClicks / stats.totalOpens) * 100 : 0;
+
+  const html = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: auto;">
+      <h2>Weekly Retention Report for ${merchantName}</h2>
+      <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+        <h3 style="margin-top: 0;">💰 Recovery Impact</h3>
+        <p style="font-size: 24px; font-weight: bold; color: #10b981;">
+          $${(stats.totalRecovered / 100).toFixed(2)} Recovered
+        </p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div style="border: 1px solid #eee; padding: 15px;">
+          <p style="color: #666; margin: 0;">Open Rate</p>
+          <p style="font-size: 18px; font-weight: bold;">${openRate.toFixed(1)}%</p>
+        </div>
+        <div style="border: 1px solid #eee; padding: 15px;">
+          <p style="color: #666; margin: 0;">Click-Through</p>
+          <p style="font-size: 18px; font-weight: bold;">${ctr.toFixed(1)}%</p>
+        </div>
+      </div>
+
+      <p style="font-size: 12px; color: #999; margin-top: 30px;">
+        This report summarizes your dunning performance over the last 7 days.
+      </p>
+    </div>
+  `;
+  
+  // ... send logic ...
+}
+VERIFICATION:
+
+Aggregation Test: Call getWeeklyStats and verify it returns non-zero values for totalOpens and totalClicks (if data exists).
+
+Formatting Test: Generate a test digest email and verify the Open Rate and CTR are displayed correctly with one decimal place.
