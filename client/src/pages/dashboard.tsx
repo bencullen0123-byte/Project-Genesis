@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ActivationState } from "@/components/empty-state";
-import { MetricsCards, QueueDepthGauge, ActivityFeed } from "@/components/dashboard-components";
+import { MetricsCards, QueueDepthGauge, ActivityFeed, FunnelMetricsCards } from "@/components/dashboard-components";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface DashboardData {
@@ -10,6 +10,11 @@ interface DashboardData {
     completedTasks: number;
     failedTasks: number;
     totalMerchants: number;
+    // Funnel metrics (Ticket 23.3)
+    totalOpens?: number;
+    totalClicks?: number;
+    openRate?: number;
+    ctr?: number;
   };
   recentTasks: any[];
   recentActivity: any[];
@@ -54,6 +59,8 @@ function LiveDashboard({ data }: { data: DashboardData }) {
       </div>
       
       <MetricsCards stats={data.stats} usage={data.usage} />
+      
+      <FunnelMetricsCards stats={data.stats} />
       
       <div className="grid gap-6 lg:grid-cols-2">
         <QueueDepthGauge usage={data.usage} />

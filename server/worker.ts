@@ -66,6 +66,13 @@ async function processTask(task: ScheduledTask): Promise<void> {
         const attemptCount = payload.attemptCount || 1;
         const template = await storage.getEmailTemplate(merchant.id, attemptCount);
         
+        // Create usage log FIRST to get logId for tracking (Ticket 23.3)
+        const usageLog = await storage.createUsageLog({
+          merchantId: task.merchantId,
+          metricType: 'dunning_email_sent',
+          amount: 1,
+        });
+        
         const emailSent = await sendDunningEmail(customerEmail, {
           invoiceId: payload.invoiceId,
           amountDue: invoice.amount_due,
@@ -75,16 +82,11 @@ async function processTask(task: ScheduledTask): Promise<void> {
           merchantId: task.merchantId,
           merchant, // Pass branding identity
           customTemplate: template ? { subject: template.subject, body: template.body } : undefined,
+          logId: usageLog.id, // Pass logId for tracking
         });
         
         if (emailSent) {
-          await storage.createUsageLog({
-            merchantId: task.merchantId,
-            metricType: 'dunning_email_sent',
-            amount: 1,
-          });
-          
-          log(`Dunning email sent and usage logged for merchant ${task.merchantId}`, 'worker');
+          log(`Dunning email sent and usage logged for merchant ${task.merchantId} (logId: ${usageLog.id})`, 'worker');
         } else {
           throw new Error('Failed to send dunning email');
         }

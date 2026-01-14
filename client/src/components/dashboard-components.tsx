@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { TrendingUp, Mail, Activity, Clock } from "lucide-react";
+import { TrendingUp, Mail, Activity, Clock, Eye, MousePointerClick } from "lucide-react";
 
 interface MetricsData {
   totalRecoveredCents?: number;
@@ -28,6 +28,39 @@ interface DashboardStats {
   completedTasks: number;
   failedTasks: number;
   totalMerchants: number;
+  // Funnel metrics (Ticket 23.3)
+  totalOpens?: number;
+  totalClicks?: number;
+  openRate?: number;
+  ctr?: number;
+}
+
+export function FunnelMetricsCards({ stats }: { stats: DashboardStats }) {
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">Open Rate</CardTitle>
+          <Eye className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold" data-testid="text-open-rate">{stats.openRate ?? 0}%</div>
+          <p className="text-xs text-muted-foreground">{stats.totalOpens ?? 0} opens tracked</p>
+        </CardContent>
+      </Card>
+      
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">Click-Through Rate</CardTitle>
+          <MousePointerClick className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold" data-testid="text-ctr">{stats.ctr ?? 0}%</div>
+          <p className="text-xs text-muted-foreground">{stats.totalClicks ?? 0} clicks tracked</p>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 export function MetricsCards({ stats, usage }: { stats: DashboardStats; usage: UsageData }) {

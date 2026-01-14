@@ -1,6 +1,12 @@
 import { Resend } from 'resend';
 import { log } from './index';
 import type { Merchant } from '@shared/schema';
+import { generateTrackingSignature } from './routes';
+
+// Base URL for tracking endpoints
+const BASE_URL = process.env.REPLIT_DEV_DOMAIN 
+  ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+  : 'http://localhost:5000';
 
 let connectionSettings: any;
 
@@ -67,6 +73,7 @@ export interface DunningEmailData {
   merchantId: string;
   merchant?: Merchant;
   customTemplate?: { subject: string; body: string };
+  logId?: number; // For tracking (Ticket 23.3)
 }
 
 export interface WeeklyDigestData {
@@ -107,6 +114,21 @@ export async function sendDunningEmail(
   subject = replaceTokens(subject, tokens);
   bodyContent = replaceTokens(bodyContent, tokens);
   
+  // Generate tracking elements (Ticket 23.3)
+  let trackingPixel = '';
+  let trackedUrl = updateUrl;
+  
+  if (data.logId) {
+    // 1. Tracking pixel for open detection
+    trackingPixel = `<img src="${BASE_URL}/api/track/open/${data.logId}" width="1" height="1" style="display:none;" alt="">`;
+    
+    // 2. Sign the redirect link for click tracking
+    if (updateUrl) {
+      const signature = generateTrackingSignature(updateUrl, data.logId.toString());
+      trackedUrl = `${BASE_URL}/api/track/click?url=${encodeURIComponent(updateUrl)}&logId=${data.logId}&sig=${signature}`;
+    }
+  }
+  
   // Assemble branded HTML shell
   const htmlBody = `
 <!DOCTYPE html>
@@ -120,9 +142,9 @@ export async function sendDunningEmail(
     ${logoUrl ? `<img src="${logoUrl}" alt="Logo" style="max-height: 50px; margin-bottom: 20px;">` : ''}
     <h2 style="color: #333;">${subject}</h2>
     <div style="line-height: 1.6; color: #444;">${bodyContent}</div>
-    ${updateUrl ? `
+    ${trackedUrl ? `
     <div style="margin: 30px 0;">
-      <a href="${updateUrl}" 
+      <a href="${trackedUrl}" 
          style="background-color: ${brandColor}; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
         Update Payment Method
       </a>
@@ -132,6 +154,7 @@ export async function sendDunningEmail(
     <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
     <p style="font-size: 12px; color: #999;">Sent by ${fromName} via Project Genesis</p>
   </div>
+  ${trackingPixel}
 </body>
 </html>
   `.trim();

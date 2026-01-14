@@ -667,6 +667,21 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(usageLogs.createdAt))
       .limit(1);
 
+    // Funnel metrics (Ticket 23.3)
+    const [funnelStats] = await db.select({
+      totalSent: sql<number>`COALESCE(sum(emails_sent), 0)::int`,
+      totalOpens: sql<number>`COALESCE(sum(total_opens), 0)::int`,
+      totalClicks: sql<number>`COALESCE(sum(total_clicks), 0)::int`,
+    }).from(dailyMetrics)
+      .where(eq(dailyMetrics.merchantId, merchantId));
+    
+    const totalSent = funnelStats?.totalSent || 0;
+    const totalOpens = funnelStats?.totalOpens || 0;
+    const totalClicks = funnelStats?.totalClicks || 0;
+    
+    const openRate = totalSent > 0 ? (totalOpens / totalSent) * 100 : 0;
+    const ctr = totalOpens > 0 ? (totalClicks / totalOpens) * 100 : 0;
+
     return {
       totalRecovered: totalRecovered?.total || 0,
       activeMerchants: 1, // You are the only merchant in your view
@@ -680,6 +695,11 @@ export class DatabaseStorage implements IStorage {
         merchants: 0,
         tasks: -3,
       },
+      // Funnel metrics (Ticket 23.3)
+      totalOpens,
+      totalClicks,
+      openRate: Math.round(openRate * 10) / 10, // 1 decimal place
+      ctr: Math.round(ctr * 10) / 10,
     };
   }
 }
