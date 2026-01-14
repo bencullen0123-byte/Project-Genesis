@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { insertScheduledTaskSchema, insertMerchantSchema } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
+import Stripe from "stripe";
 import { getStripeClientFactory } from "./stripeClient";
 import { checkUsageLimits, requireMerchant } from "./middleware";
 import { log } from "./index";
@@ -510,12 +511,39 @@ export async function registerRoutes(
   // This must be publicly accessible to receive events from Stripe.
   // Note: In production, verify req.headers['stripe-signature'] here.
   app.post("/api/webhooks/stripe", async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    // FAIL SAFE: Configuration Check
+    if (!secret || !signature) {
+      log("Webhook failed: Missing secret or signature", "stripe", "error");
+      return res.status(400).send("Webhook Error: Missing configuration");
+    }
+
+    let event: Stripe.Event;
+
     try {
-      const result = await handleStripeWebhook(req.body);
+      // CRYPTOGRAPHIC VERIFICATION
+      // We use the raw buffer (captured in server/index.ts) + the header + the secret
+      // If this fails, it throws an error immediately.
+      event = Stripe.webhooks.constructEvent(
+        req.rawBody as Buffer,
+        signature as string,
+        secret
+      );
+    } catch (err: any) {
+      log(`Webhook signature verification failed: ${err.message}`, "stripe", "error");
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    try {
+      // PROCESS VALIDATED EVENT
+      // We pass the verified 'event' object, NOT 'req.body' (which is unverified JSON)
+      const result = await handleStripeWebhook(event);
       res.json(result);
     } catch (err: any) {
-      log(`Webhook Error: ${err.message || err}`, 'stripe', 'error');
-      res.status(400).send(`Webhook Error: ${err.message || err}`);
+      log(`Webhook processing error: ${err.message}`, "stripe", "error");
+      res.status(400).send(`Webhook Handler Error: ${err.message}`);
     }
   });
 
