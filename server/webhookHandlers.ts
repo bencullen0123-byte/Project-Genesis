@@ -312,6 +312,7 @@ async function handleSubscriptionUpdated(event: Stripe.Event): Promise<WebhookRe
   // Environment variables allow flexibility between Test/Prod modes.
   const PRICE_MAP: Record<string, string> = {
     [process.env.STRIPE_PRICE_ID_PRO || 'price_pro_test']: 'price_pro',
+    [process.env.STRIPE_PRICE_ID_GROWTH || 'price_growth_test']: 'price_growth',
     [process.env.STRIPE_PRICE_ID_FREE || 'price_free_test']: 'price_free'
   };
 

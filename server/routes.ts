@@ -113,15 +113,19 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Invalid or unauthorized task type" });
         }
 
-        // 2. QUEUE FLOOD PREVENTION
-        // Cap the number of pending tasks to prevent DoS via task spam
-        const MAX_PENDING_QUEUE = 50;
+        // 2. QUEUE FLOOD PREVENTION (Dynamic)
+        // Check how many tasks are currently pending for this merchant
         const pendingCount = await storage.getPendingTasksCount(req.merchant!.id);
         
-        if (pendingCount >= MAX_PENDING_QUEUE) {
-          log(`Queue limit reached for merchant ${req.merchant!.id} (${pendingCount}/${MAX_PENDING_QUEUE})`, 'security', 'warn');
+        // Lookup Plan Limits
+        const planKey = req.merchant!.subscriptionPlanId || 'default';
+        const planConfig = PLANS[planKey] || PLANS['default'];
+        const maxQueue = planConfig.queueLimit;
+        
+        if (pendingCount >= maxQueue) {
+          log(`Queue limit reached for merchant ${req.merchant!.id} (${pendingCount}/${maxQueue})`, 'security', 'warn');
           return res.status(429).json({ 
-            message: "Queue limit reached. Please wait for your pending tasks to complete." 
+            message: `Queue limit reached (${pendingCount}/${maxQueue}). Upgrade your plan to increase concurrency.` 
           });
         }
 
