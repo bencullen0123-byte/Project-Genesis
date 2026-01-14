@@ -1,0 +1,60 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 20 - SECURITY REMEDIATION
+CONTEXT: A "Shadow API" vulnerability exists. We have a secure webhook route in index.ts, but an insecure one in server/routes.ts that accepts unverified payloads. We must update server/routes.ts to enforce cryptographic signature verification, effectively closing the security hole.
+
+TARGET FILE: server/routes.ts
+
+OBJECTIVE: Replace the insecure /api/webhooks/stripe route with a signature-verified implementation.
+
+ACTION PLAN
+Step 1: Update Imports Ensure Stripe is imported at the top of server/routes.ts.
+
+TypeScript
+
+import Stripe from "stripe";
+Step 2: Secure the Route Locate app.post("/api/webhooks/stripe", ...) inside the registerRoutes function. Replace the entire handler with this code:
+
+TypeScript
+
+  // STRIPE WEBHOOK FORTRESS (SECURED)
+  app.post("/api/webhooks/stripe", async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+    
+    // The secret must be set in your Environment Variables (Replit Secrets)
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    // 1. FAIL SAFE: Reject requests without security context
+    if (!secret || !signature) {
+      log("Webhook failed: Missing STRIPE_WEBHOOK_SECRET or signature header", "stripe", "error");
+      return res.status(400).send("Webhook Error: Configuration missing");
+    }
+
+    let event: Stripe.Event;
+
+    try {
+      // 2. CRYPTOGRAPHIC VERIFICATION
+      // We use the rawBody captured by the middleware in server/index.ts
+      event = Stripe.webhooks.constructEvent(
+        (req as any).rawBody, 
+        signature as string, 
+        secret
+      );
+    } catch (err: any) {
+      // 3. SECURITY LOGGING (Ticket 20.3)
+      log(`⚠️ Security Alert: Webhook signature verification failed from IP ${req.ip}: ${err.message}`, "stripe", "error");
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    try {
+      // 4. PROCESS VERIFIED EVENT
+      // Pass the *verified* event object, NOT the raw req.body
+      const result = await handleStripeWebhook(event);
+      res.json(result);
+    } catch (err: any) {
+      log(`Webhook processing error: ${err.message}`, 'stripe', 'error');
+      // Return 200 to Stripe to prevent retries on logic errors (optional, prevents loop)
+      res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+  });
+Step 3: Verification After applying this fix, running a curl command with a fake JSON payload to your-url/api/webhooks/stripe must fail with:
+
+400 Webhook Error: ...

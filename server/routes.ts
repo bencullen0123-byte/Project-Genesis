@@ -514,36 +514,33 @@ export async function registerRoutes(
     const signature = req.headers['stripe-signature'];
     const secret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    // FAIL SAFE: Configuration Check
     if (!secret || !signature) {
-      log("Webhook failed: Missing secret or signature", "stripe", "error");
-      return res.status(400).send("Webhook Error: Missing configuration");
+      log("Webhook failed: Missing configuration", "stripe", "error");
+      return res.status(400).send("Webhook Error: Configuration missing");
     }
 
     let event: Stripe.Event;
 
     try {
       // CRYPTOGRAPHIC VERIFICATION
-      // We use the raw buffer (captured in server/index.ts) + the header + the secret
-      // If this fails, it throws an error immediately.
       event = Stripe.webhooks.constructEvent(
-        req.rawBody as Buffer,
+        (req as any).rawBody,
         signature as string,
         secret
       );
     } catch (err: any) {
-      log(`Webhook signature verification failed: ${err.message}`, "stripe", "error");
+      // SECURITY LOGGING (Enhanced with IP)
+      log(`⚠️ Security Alert: Webhook signature verification failed from IP ${req.ip}: ${err.message}`, "stripe", "error");
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     try {
-      // PROCESS VALIDATED EVENT
-      // We pass the verified 'event' object, NOT 'req.body' (which is unverified JSON)
+      // PASS VERIFIED EVENT
       const result = await handleStripeWebhook(event);
       res.json(result);
     } catch (err: any) {
       log(`Webhook processing error: ${err.message}`, "stripe", "error");
-      res.status(400).send(`Webhook Handler Error: ${err.message}`);
+      res.status(400).send(`Webhook Error: ${err.message}`);
     }
   });
 
