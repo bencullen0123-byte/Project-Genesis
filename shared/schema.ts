@@ -18,6 +18,10 @@ export const merchants = pgTable("merchants", {
   subscriptionPlanId: text("subscription_plan_id"),
   billingCountry: text("billing_country"),
   billingAddress: text("billing_address"),
+  brandColor: text("brand_color").default("#000000").notNull(),
+  logoUrl: text("logo_url"),
+  fromName: text("from_name"),
+  supportEmail: text("support_email"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_merchants_stripe_connect").on(table.stripeConnectId),
@@ -75,11 +79,26 @@ export const dailyMetrics = pgTable("daily_metrics", {
   primaryKey({ columns: [table.merchantId, table.metricDate] }),
 ]);
 
+// 6. EMAIL TEMPLATES - Custom dunning sequences per merchant
+export const emailTemplates = pgTable("email_templates", {
+  id: serial("id").primaryKey(),
+  merchantId: text("merchant_id")
+    .notNull()
+    .references(() => merchants.id, { onDelete: "cascade" }),
+  retryAttempt: integer("retry_attempt").notNull(),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_templates_merchant_retry").on(table.merchantId, table.retryAttempt),
+]);
+
 // Relations
 export const merchantsRelations = relations(merchants, ({ many }) => ({
   scheduledTasks: many(scheduledTasks),
   usageLogs: many(usageLogs),
   dailyMetrics: many(dailyMetrics),
+  emailTemplates: many(emailTemplates),
 }));
 
 export const scheduledTasksRelations = relations(scheduledTasks, ({ one }) => ({
@@ -99,6 +118,13 @@ export const usageLogsRelations = relations(usageLogs, ({ one }) => ({
 export const dailyMetricsRelations = relations(dailyMetrics, ({ one }) => ({
   merchant: one(merchants, {
     fields: [dailyMetrics.merchantId],
+    references: [merchants.id],
+  }),
+}));
+
+export const emailTemplatesRelations = relations(emailTemplates, ({ one }) => ({
+  merchant: one(merchants, {
+    fields: [emailTemplates.merchantId],
     references: [merchants.id],
   }),
 }));
@@ -125,6 +151,11 @@ export const insertProcessedEventSchema = createInsertSchema(processedEvents).om
 
 export const insertDailyMetricSchema = createInsertSchema(dailyMetrics);
 
+export const insertEmailTemplateSchema = createInsertSchema(emailTemplates).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type Merchant = typeof merchants.$inferSelect;
 export type InsertMerchant = z.infer<typeof insertMerchantSchema>;
@@ -140,6 +171,9 @@ export type InsertProcessedEvent = z.infer<typeof insertProcessedEventSchema>;
 
 export type DailyMetric = typeof dailyMetrics.$inferSelect;
 export type InsertDailyMetric = z.infer<typeof insertDailyMetricSchema>;
+
+export type EmailTemplate = typeof emailTemplates.$inferSelect;
+export type InsertEmailTemplate = z.infer<typeof insertEmailTemplateSchema>;
 
 // Task status enum for type safety
 export const TaskStatus = {
