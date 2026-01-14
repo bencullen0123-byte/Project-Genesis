@@ -1,7 +1,15 @@
 import { Resend } from 'resend';
 import { log } from './index';
+import type { Merchant } from '@shared/schema';
 
 let connectionSettings: any;
+
+// Token replacer with strict whitelist for security
+function replaceTokens(text: string, tokens: Record<string, string>): string {
+  return text.replace(/\{\{(customer_name|amount|update_url)\}\}/g, (match, key) => {
+    return tokens[key] || match;
+  });
+}
 
 async function getCredentials(): Promise<{ apiKey: string; fromEmail: string } | null> {
   try {
@@ -57,6 +65,8 @@ export interface DunningEmailData {
   hostedInvoiceUrl?: string | null;
   attemptCount?: number;
   merchantId: string;
+  merchant?: Merchant;
+  customTemplate?: { subject: string; body: string };
 }
 
 export interface WeeklyDigestData {
@@ -71,9 +81,33 @@ export async function sendDunningEmail(
 ): Promise<boolean> {
   const formattedAmount = (data.amountDue / 100).toFixed(2);
   const currencySymbol = data.currency.toUpperCase() === 'USD' ? '$' : data.currency.toUpperCase();
+  const updateUrl = data.hostedInvoiceUrl || '';
   
-  const subject = `Action Required: Payment of ${currencySymbol}${formattedAmount} Failed`;
+  // Branding from merchant (with fallbacks)
+  const brandColor = data.merchant?.brandColor || '#0066cc';
+  const logoUrl = data.merchant?.logoUrl;
+  const fromName = data.merchant?.fromName || data.merchant?.email || 'Support';
   
+  // Token values for replacement
+  const tokens = {
+    customer_name: 'Customer',
+    amount: `${currencySymbol}${formattedAmount}`,
+    update_url: updateUrl,
+  };
+  
+  // Select content (custom template or defaults)
+  const defaultSubject = `Action Required: Payment of ${currencySymbol}${formattedAmount} Failed`;
+  const defaultBody = `<p>We were unable to process your payment of <strong>{{amount}}</strong>.</p>
+    <p>This is attempt ${data.attemptCount || 1} to collect this payment. Please update your payment method to avoid service interruption.</p>`;
+  
+  let subject = data.customTemplate?.subject || defaultSubject;
+  let bodyContent = data.customTemplate?.body || defaultBody;
+  
+  // Apply token replacement
+  subject = replaceTokens(subject, tokens);
+  bodyContent = replaceTokens(bodyContent, tokens);
+  
+  // Assemble branded HTML shell
   const htmlBody = `
 <!DOCTYPE html>
 <html>
@@ -81,47 +115,39 @@ export async function sendDunningEmail(
   <meta charset="utf-8">
   <title>Payment Failed</title>
 </head>
-<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h1 style="color: #333;">Payment Update Required</h1>
-  
-  <p>We were unable to process your payment of <strong>${currencySymbol}${formattedAmount}</strong>.</p>
-  
-  <p>This is attempt ${data.attemptCount || 1} to collect this payment. Please update your payment method to avoid service interruption.</p>
-  
-  ${data.hostedInvoiceUrl ? `
-  <p style="margin: 30px 0;">
-    <a href="${data.hostedInvoiceUrl}" 
-       style="background-color: #0066cc; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
-      Update Payment Method
-    </a>
-  </p>
-  ` : ''}
-  
-  <p style="color: #666; font-size: 14px;">
-    Invoice ID: ${data.invoiceId}
-  </p>
-  
-  <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-  
-  <p style="color: #999; font-size: 12px;">
-    If you have any questions, please contact our support team.
-  </p>
+<body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <div style="border-top: 4px solid ${brandColor}; padding-top: 20px;">
+    ${logoUrl ? `<img src="${logoUrl}" alt="Logo" style="max-height: 50px; margin-bottom: 20px;">` : ''}
+    <h2 style="color: #333;">${subject}</h2>
+    <div style="line-height: 1.6; color: #444;">${bodyContent}</div>
+    ${updateUrl ? `
+    <div style="margin: 30px 0;">
+      <a href="${updateUrl}" 
+         style="background-color: ${brandColor}; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
+        Update Payment Method
+      </a>
+    </div>
+    ` : ''}
+    <p style="color: #666; font-size: 14px;">Invoice ID: ${data.invoiceId}</p>
+    <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+    <p style="font-size: 12px; color: #999;">Sent by ${fromName} via Project Genesis</p>
+  </div>
 </body>
 </html>
   `.trim();
 
   const textBody = `
-Payment Update Required
+${subject}
 
 We were unable to process your payment of ${currencySymbol}${formattedAmount}.
 
 This is attempt ${data.attemptCount || 1} to collect this payment. Please update your payment method to avoid service interruption.
 
-${data.hostedInvoiceUrl ? `Update your payment method here: ${data.hostedInvoiceUrl}` : ''}
+${updateUrl ? `Update your payment method here: ${updateUrl}` : ''}
 
 Invoice ID: ${data.invoiceId}
 
-If you have any questions, please contact our support team.
+Sent by ${fromName}
   `.trim();
 
   const resend = await getResendClient();

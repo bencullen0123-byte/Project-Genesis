@@ -62,13 +62,19 @@ async function processTask(task: ScheduledTask): Promise<void> {
           return;
         }
         
+        // Fetch failure-specific template for this attempt (if defined)
+        const attemptCount = payload.attemptCount || 1;
+        const template = await storage.getEmailTemplate(merchant.id, attemptCount);
+        
         const emailSent = await sendDunningEmail(customerEmail, {
           invoiceId: payload.invoiceId,
           amountDue: invoice.amount_due,
           currency: invoice.currency,
           hostedInvoiceUrl: invoice.hosted_invoice_url,
-          attemptCount: payload.attemptCount,
+          attemptCount,
           merchantId: task.merchantId,
+          merchant, // Pass branding identity
+          customTemplate: template ? { subject: template.subject, body: template.body } : undefined,
         });
         
         if (emailSent) {
