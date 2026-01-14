@@ -13,6 +13,15 @@ import { PLANS } from '@shared/plans';
 import { handleStripeWebhook } from "./webhookHandlers";
 import DOMPurify from 'isomorphic-dompurify';
 
+// HMAC utility for secure tracking links (Ticket 23.2)
+const APP_SECRET = process.env.SESSION_SECRET || 'dev-secret-do-not-use-in-prod';
+
+export function generateTrackingSignature(url: string, logId: string): string {
+  return crypto.createHmac('sha256', APP_SECRET)
+    .update(`${url}:${logId}`)
+    .digest('hex');
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -706,6 +715,64 @@ export async function registerRoutes(
     } catch (error: any) {
       log(`GDPR erasure failed for merchant ${merchantId}: ${error.message}`, 'admin', 'error');
       res.status(500).json({ error: 'Internal Server Error', message: 'Failed to erase merchant data' });
+    }
+  });
+
+  // ===============================================
+  // TRACKING ENDPOINTS (Ticket 23.2)
+  // ===============================================
+
+  // Open Pixel - Records email opens and serves a 1x1 transparent GIF
+  app.get("/api/track/open/:logId", async (req, res) => {
+    const logId = parseInt(req.params.logId);
+    
+    try {
+      // 1. Log the interaction and increment metrics (Atomic update)
+      await storage.recordEmailOpen(logId);
+      
+      // 2. Serve a 1x1 transparent GIF
+      const pixel = Buffer.from(
+        "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", 
+        "base64"
+      );
+      res.set({
+        "Content-Type": "image/gif",
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+      });
+      res.send(pixel);
+    } catch (error) {
+      // Fail silently to the user, but log for us
+      log(`Pixel tracking error for log ${logId}: ${error}`, 'tracking', 'error');
+      res.status(200).send(); // Always return 200 for pixels
+    }
+  });
+
+  // Signed Click Redirector - Verifies HMAC signature before recording click
+  app.get("/api/track/click", async (req, res) => {
+    const { url, logId, sig } = req.query as { url: string; logId: string; sig: string };
+
+    if (!url || !logId || !sig) {
+      return res.status(400).send("Missing tracking parameters");
+    }
+
+    // SECURITY: Verify the HMAC signature
+    const expectedSig = generateTrackingSignature(url, logId);
+    if (sig !== expectedSig) {
+      log(`Invalid tracking signature detected for log ${logId}`, 'security', 'warn');
+      return res.status(403).send("Invalid tracking signature");
+    }
+
+    try {
+      // 1. Log the click and increment metrics
+      await storage.recordEmailClick(parseInt(logId));
+      
+      // 2. Redirect to destination
+      res.redirect(url);
+    } catch (error) {
+      log(`Link tracking error for log ${logId}: ${error}`, 'tracking', 'error');
+      res.redirect(url); // Redirect anyway so user isn't stuck
     }
   });
 

@@ -104,6 +104,10 @@ export interface IStorage {
   createOrUpdateEmailTemplate(merchantId: string, data: { retryAttempt: number; subject: string; body: string }): Promise<EmailTemplate>;
   getEmailTemplate(merchantId: string, retryAttempt: number): Promise<EmailTemplate | undefined>;
 
+  // Tracking (Ticket 23.2)
+  recordEmailOpen(logId: number): Promise<void>;
+  recordEmailClick(logId: number): Promise<void>;
+
   // Dashboard Stats
   getDashboardStats(merchantId: string): Promise<{
     totalRecovered: number;
@@ -560,6 +564,53 @@ export class DatabaseStorage implements IStorage {
         eq(emailTemplates.retryAttempt, retryAttempt)
       ));
     return template;
+  }
+
+  // Tracking Methods (Ticket 23.2) - Atomic updates for opens and clicks
+  async recordEmailOpen(logId: number): Promise<void> {
+    // 1. Update the usage log with openedAt timestamp
+    const [logRecord] = await db
+      .update(usageLogs)
+      .set({ openedAt: sql`NOW()` })
+      .where(and(
+        eq(usageLogs.id, logId),
+        sql`opened_at IS NULL` // Only record first open
+      ))
+      .returning();
+    
+    if (!logRecord) return; // Already opened or not found
+    
+    // 2. Atomically increment daily_metrics.total_opens
+    const today = new Date().toISOString().split('T')[0];
+    await db.execute(sql`
+      INSERT INTO daily_metrics (merchant_id, metric_date, recovered_cents, emails_sent, total_opens, total_clicks)
+      VALUES (${logRecord.merchantId}, ${today}, 0, 0, 1, 0)
+      ON CONFLICT (merchant_id, metric_date)
+      DO UPDATE SET total_opens = daily_metrics.total_opens + 1
+    `);
+  }
+
+  async recordEmailClick(logId: number): Promise<void> {
+    // 1. Update the usage log with clickedAt timestamp
+    const [logRecord] = await db
+      .update(usageLogs)
+      .set({ clickedAt: sql`NOW()` })
+      .where(and(
+        eq(usageLogs.id, logId),
+        sql`clicked_at IS NULL` // Only record first click
+      ))
+      .returning();
+    
+    if (!logRecord) return; // Already clicked or not found
+    
+    // 2. Atomically increment daily_metrics.total_clicks
+    const today = new Date().toISOString().split('T')[0];
+    await db.execute(sql`
+      INSERT INTO daily_metrics (merchant_id, metric_date, recovered_cents, emails_sent, total_opens, total_clicks)
+      VALUES (${logRecord.merchantId}, ${today}, 0, 0, 0, 1)
+      ON CONFLICT (merchant_id, metric_date)
+      DO UPDATE SET total_clicks = daily_metrics.total_clicks + 1
+    `);
   }
 
   // Dashboard Stats (Tenant-Scoped)
