@@ -1,0 +1,88 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 22 - TICKET 22.2 (CONTENT SANITIZATION)
+CONTEXT: We are allowing merchants to define custom HTML for their emails. We must sanitize this input to prevent XSS attacks that could compromise our customers' email clients or our own dashboard.
+
+OBJECTIVE: Secure the branding update route and create a sanitized template management endpoint.
+
+ACTION PLAN
+Step 1: Install Security Dependencies Run the following in the Replit shell: npm install dompurify isomorphic-dompurify && npm install -D @types/dompurify
+
+Target File: server/routes.ts
+
+Step 2: Secure Branding PATCH Update PATCH /api/merchants/:id to enforce strict formatting for branding.
+
+TypeScript
+
+// server/routes.ts (Inside PATCH /api/merchants/:id)
+
+    const { 
+      billingCountry, 
+      billingAddress, 
+      brandColor, 
+      logoUrl, 
+      fromName, 
+      supportEmail 
+    } = req.body;
+
+    const updateData: any = {};
+    if (billingCountry !== undefined) updateData.billingCountry = billingCountry;
+    if (billingAddress !== undefined) updateData.billingAddress = billingAddress;
+    if (fromName !== undefined) updateData.fromName = fromName;
+    if (supportEmail !== undefined) updateData.supportEmail = supportEmail;
+
+    // 1. HEX COLOR VALIDATION
+    if (brandColor !== undefined) {
+      const hexRegex = /^#[0-9A-Fa-f]{6}$/;
+      if (!hexRegex.test(brandColor)) {
+        return res.status(400).json({ message: "Invalid hex color format (e.g. #FF0000)" });
+      }
+      updateData.brandColor = brandColor;
+    }
+
+    // 2. LOGO URL PROTOCOL CHECK
+    if (logoUrl !== undefined) {
+      if (logoUrl && !logoUrl.startsWith('https://')) {
+        return res.status(400).json({ message: "Logo URL must use secure HTTPS protocol" });
+      }
+      updateData.logoUrl = logoUrl;
+    }
+Step 3: Implement Sanitized Template Endpoint Create the route to handle custom email sequences.
+
+TypeScript
+
+// server/routes.ts (Inside registerRoutes)
+import isPurify from 'isomorphic-dompurify';
+
+  // EMAIL TEMPLATE MANAGEMENT (SECURED)
+  app.post("/api/email-templates", requireAuth(), requireMerchant, async (req, res) => {
+    try {
+      const { retryAttempt, subject, body } = req.body;
+
+      if (![1, 2, 3].includes(retryAttempt)) {
+        return res.status(400).json({ message: "Invalid retry attempt (must be 1, 2, or 3)" });
+      }
+
+      // SECURITY: DOM SANITIZATION
+      // Strips <script>, <onmouseover>, etc., while keeping safe layout tags
+      const sanitizedBody = isPurify.sanitize(body);
+
+      const template = await storage.createOrUpdateEmailTemplate(req.merchant!.id, {
+        retryAttempt,
+        subject: subject.substring(0, 200), // Subject length limit
+        body: sanitizedBody
+      });
+
+      res.status(201).json(template);
+    } catch (error) {
+      log(`Template update error: ${error}`, 'routes', 'error');
+      res.status(500).json({ message: "Failed to save template" });
+    }
+  });
+Target File: server/storage.ts Add the createOrUpdateEmailTemplate method to handle the upsert.
+
+VERIFICATION:
+
+Security Check: Try to POST a template with <script>alert('xss')</script> in the body.
+
+Success Metric: The saved record in the DB should have the <script> tag removed, but keep text and safe tags.
+
+Security Check: Try to PATCH a brandColor as "red". It should be rejected.
