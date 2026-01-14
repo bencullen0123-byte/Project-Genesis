@@ -1,0 +1,97 @@
+🚀 SPRINT 22: TICKET 22.1 (SCHEMA FOUNDATIONS)
+Goal: Update the data model to support multi-tenant branding and escalating dunning sequences.
+
+Technical Directive:
+
+Identity Migration: Add branding columns to the merchants table to store visual and contact metadata.
+
+Sequence Logic: Create the emailTemplates table to store custom subjects and bodies for specific retry attempts.
+
+Relational Integrity: Establish a one-to-many relationship between a Merchant and their Templates.
+
+🚀 REPLIT BRIEF: SPRINT 22 - TICKET 22.1
+Copy and paste this directive into Replit.
+
+🚨 SYSTEM DIRECTIVE: SPRINT 22 - TICKET 22.1 (IDENTITY SCHEMA)
+CONTEXT: We are moving from a generic platform to a white-labeled retention engine. We need to store merchant-specific branding and custom dunning email sequences.
+
+OBJECTIVE: Update shared/schema.ts to include branding fields in the merchants table and create a new email_templates table.
+
+ACTION PLAN
+Target File: shared/schema.ts
+
+Step 1: Update the merchants table Add the four identity columns to the merchants table definition.
+
+TypeScript
+
+// shared/schema.ts
+
+export const merchants = pgTable("merchants", {
+  // ... existing fields ...
+  
+  // BRANDING IDENTITY (Ticket 22.1)
+  brandColor: text("brand_color").default("#000000").notNull(),
+  logoUrl: text("logo_url"),
+  fromName: text("from_name"),
+  supportEmail: text("support_email"),
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, // ... indexes
+);
+Step 2: Create the emailTemplates table Define the table for sequenced messaging.
+
+TypeScript
+
+// shared/schema.ts
+
+export const emailTemplates = pgTable("email_templates", {
+  id: serial("id").primaryKey(),
+  merchantId: text("merchant_id")
+    .notNull()
+    .references(() => merchants.id, { onDelete: "cascade" }),
+  retryAttempt: integer("retry_attempt").notNull(), // 1, 2, or 3
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_templates_merchant_retry").on(table.merchantId, table.retryAttempt),
+]);
+Step 3: Update Relations Ensure the new table is linked to the merchant record.
+
+TypeScript
+
+// shared/schema.ts (Relations section)
+
+export const merchantsRelations = relations(merchants, ({ many }) => ({
+  scheduledTasks: many(scheduledTasks),
+  usageLogs: many(usageLogs),
+  dailyMetrics: many(dailyMetrics),
+  emailTemplates: many(emailTemplates), // Add this line
+}));
+
+export const emailTemplatesRelations = relations(emailTemplates, ({ one }) => ({
+  merchant: one(merchants, {
+    fields: [emailTemplates.merchantId],
+    references: [merchants.id],
+  }),
+}));
+Step 4: Update Exports Add the new table to the insert schemas and type exports.
+
+TypeScript
+
+// Add near existing insert schemas
+export const insertEmailTemplateSchema = createInsertSchema(emailTemplates).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Add near existing types
+export type EmailTemplate = typeof emailTemplates.$inferSelect;
+export type InsertEmailTemplate = z.infer<typeof insertEmailTemplateSchema>;
+VERIFICATION:
+
+Migration: Run npm run db:push to apply changes to the database.
+
+Schema Check: Verify the merchants table now has brand_color.
+
+Schema Check: Verify the new email_templates table exists.
