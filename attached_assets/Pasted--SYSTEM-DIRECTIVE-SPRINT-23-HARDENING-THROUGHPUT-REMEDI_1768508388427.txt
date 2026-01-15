@@ -1,0 +1,90 @@
+🚨 SYSTEM DIRECTIVE: SPRINT 23 - HARDENING & THROUGHPUT (REMEDIATION)
+CONTEXT: A technical audit has identified a critical security timing attack in our signature verification and a throughput bottleneck in our background worker.
+
+OBJECTIVE: Apply the three remediations identified in the audit: Constant-time signature verification, concurrent worker loops, and non-blocking metrics updates.
+
+ACTION PLAN
+Target File: server/routes.ts
+
+Step 1: Secure Signature Verification Replace the simple string comparison in /api/track/click with a timing-safe buffer comparison.
+
+TypeScript
+
+// server/routes.ts (Inside GET /api/track/click)
+
+  const expectedSig = generateTrackingSignature(url as string, logId as string);
+  
+  // SECURITY: Prevent Timing Attacks via constant-time comparison
+  const expectedBuffer = Buffer.from(expectedSig);
+  const providedBuffer = Buffer.from(sig as string);
+  
+  if (providedBuffer.length !== expectedBuffer.length || 
+      !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
+    log(`Invalid tracking signature detected for log ${logId}`, 'security', 'warn');
+    return res.status(403).send("Invalid tracking signature");
+  }
+Target File: server/worker.ts
+
+Step 2: Implement Concurrent Worker Loops Transform the worker from a serial loop to a multi-threaded execution pool.
+
+TypeScript
+
+// server/worker.ts
+
+const CONCURRENCY_LIMIT = 5; // Process 5 tasks simultaneously
+
+export function startWorker(): void {
+  log(`Worker starting with ${CONCURRENCY_LIMIT}x concurrency...`, 'worker');
+  ensureSystemTasks();
+
+  // Initialize a pool of concurrent workers
+  for (let i = 0; i < CONCURRENCY_LIMIT; i++) {
+    runWorkerLoop(i);
+  }
+}
+
+async function runWorkerLoop(workerId: number): Promise<void> {
+  async function step() {
+    try {
+      const task = await storage.claimNextTask();
+      if (task) {
+        log(`Worker ${workerId} executing task: ${task.taskType}`, 'worker');
+        await executeTask(task);
+        setTimeout(step, 100); // Small breather
+      } else {
+        setTimeout(step, 5000); // Wait for new tasks
+      }
+    } catch (error) {
+      log(`Worker ${workerId} error: ${error}`, 'worker', 'error');
+      setTimeout(step, 10000); // Backoff on error
+    }
+  }
+  step();
+}
+Target File: server/storage.ts
+
+Step 3: Non-Blocking Metrics Update recordEmailOpen to perform the metric increment without blocking the pixel response.
+
+TypeScript
+
+// server/storage.ts
+
+async recordEmailOpen(logId: number) {
+  // 1. Mandatory log update (Must be awaited for forensic integrity)
+  await db.update(usageLogs)
+    .set({ openedAt: new Date() })
+    .where(eq(usageLogs.id, logId));
+
+  // 2. Metric increment (Non-blocking to prevent row-lock contention)
+  // We don't await this to ensure the pixel serves instantly
+  this.incrementDailyMetric(logId, 'totalOpens').catch(err => 
+    console.error("Async metric update failed:", err)
+  );
+}
+VERIFICATION:
+
+Security Check: Verify that signed links still work, but invalid ones are still rejected.
+
+Performance Check: Verify the logs show multiple Worker X executing task messages overlapping in time.
+
+Pixel Speed: Verify that the open pixel serves a response in < 50ms.
