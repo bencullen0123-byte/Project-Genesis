@@ -352,39 +352,48 @@ async function ensureSystemTasks(): Promise<void> {
   }
 }
 
+const CONCURRENCY_LIMIT = 5; // Process 5 tasks simultaneously
+
 export function startWorker(): void {
-  log('Worker starting...', 'worker');
+  log(`Worker starting with ${CONCURRENCY_LIMIT}x concurrency...`, 'worker');
   
   // Boot the Watchdog to ensure critical tasks exist
   ensureSystemTasks();
 
-  async function run(): Promise<void> {
+  // Initialize a pool of concurrent workers
+  for (let i = 0; i < CONCURRENCY_LIMIT; i++) {
+    runWorkerLoop(i);
+  }
+  
+  log('Worker loop initialized', 'worker');
+}
+
+async function runWorkerLoop(workerId: number): Promise<void> {
+  async function step(): Promise<void> {
     try {
       const task = await storage.claimNextTask();
 
       if (task) {
-        log(`Claimed task ${task.id} type ${task.taskType}`, 'worker');
+        log(`Worker ${workerId} claimed task ${task.id} type ${task.taskType}`, 'worker');
         
         try {
           await processTask(task);
           await storage.updateTaskStatus(task.id, 'completed');
-          log(`Task ${task.id} completed successfully`, 'worker');
+          log(`Worker ${workerId} completed task ${task.id}`, 'worker');
         } catch (taskError: any) {
-          log(`Task ${task.id} processing error: ${taskError.message}`, 'worker');
+          log(`Worker ${workerId} task ${task.id} error: ${taskError.message}`, 'worker');
           await storage.updateTaskStatus(task.id, 'failed');
-          log(`Task ${task.id} marked as failed`, 'worker');
         }
         
-        setTimeout(run, TASK_FOUND_DELAY_MS);
+        setTimeout(step, TASK_FOUND_DELAY_MS);
       } else {
-        setTimeout(run, POLL_INTERVAL_MS);
+        setTimeout(step, POLL_INTERVAL_MS);
       }
     } catch (error: any) {
-      log(`Worker error: ${error.message}`, 'worker');
-      setTimeout(run, ERROR_BACKOFF_MS);
+      log(`Worker ${workerId} error: ${error.message}`, 'worker', 'error');
+      setTimeout(step, ERROR_BACKOFF_MS);
     }
   }
 
-  run();
-  log('Worker loop initialized', 'worker');
+  step();
 }

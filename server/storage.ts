@@ -578,7 +578,7 @@ export class DatabaseStorage implements IStorage {
 
   // Tracking Methods (Ticket 23.2) - Atomic updates for opens and clicks
   async recordEmailOpen(logId: number): Promise<void> {
-    // 1. Update the usage log with openedAt timestamp
+    // 1. Mandatory log update (Must be awaited for forensic integrity)
     const [logRecord] = await db
       .update(usageLogs)
       .set({ openedAt: sql`NOW()` })
@@ -590,14 +590,15 @@ export class DatabaseStorage implements IStorage {
     
     if (!logRecord) return; // Already opened or not found
     
-    // 2. Atomically increment daily_metrics.total_opens
+    // 2. Metric increment (Non-blocking to serve pixel instantly)
+    // We don't await this to ensure the pixel serves fast
     const today = new Date().toISOString().split('T')[0];
-    await db.execute(sql`
+    db.execute(sql`
       INSERT INTO daily_metrics (merchant_id, metric_date, recovered_cents, emails_sent, total_opens, total_clicks)
       VALUES (${logRecord.merchantId}, ${today}, 0, 0, 1, 0)
       ON CONFLICT (merchant_id, metric_date)
       DO UPDATE SET total_opens = daily_metrics.total_opens + 1
-    `);
+    `).catch(err => console.error("Async metric update failed:", err));
   }
 
   async recordEmailClick(logId: number): Promise<void> {

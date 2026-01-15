@@ -757,9 +757,13 @@ export async function registerRoutes(
       return res.status(400).send("Missing tracking parameters");
     }
 
-    // SECURITY: Verify the HMAC signature
+    // SECURITY: Verify the HMAC signature with timing-safe comparison
     const expectedSig = generateTrackingSignature(url, logId);
-    if (sig !== expectedSig) {
+    const expectedBuffer = Buffer.from(expectedSig);
+    const providedBuffer = Buffer.from(sig);
+    
+    if (providedBuffer.length !== expectedBuffer.length || 
+        !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
       log(`Invalid tracking signature detected for log ${logId}`, 'security', 'warn');
       return res.status(403).send("Invalid tracking signature");
     }
